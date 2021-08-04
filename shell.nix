@@ -1,14 +1,7 @@
-{ pkgsc ? import <nixpkgs> }:
+{ pkgs ? import <nixpkgs> { } }:
 
-let pkgs = pkgsc { };
-
-in
-
-pkgs.mkShell {
-  packages = with pkgs; [
-    renderdoc
-    cabal-install
-    cabal2nix
-  ];
-  inputsFrom = [ (import ./default.nix { inherit pkgsc; }).env ];
+(import ./. { inherit pkgs; }).shellFor {
+  packages = p: [ p.halflife ];
+  withHoogle = true;
+  buildInputs = with pkgs; [ cabal-install renderdoc haskellPackages.hoogle ];
 }
