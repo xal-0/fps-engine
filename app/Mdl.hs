@@ -1,117 +1,201 @@
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Mdl
-  ( Studio (..),
-    Model (..),
-    Mesh (..),
+  ( Studio,
+    studioBodyparts,
+    studioTextures,
+    Texture,
+    textureSize,
+    textureData,
+    Bodypart,
+    bodypartModels,
+    bodypartDefault,
+    bodypartDefaultModel,
+    Model,
+    modelMeshes,
+    Mesh,
+    meshSkin,
+    meshTris,
     readStudio,
   )
 where
 
+import Control.Applicative
+import Control.Lens
 import Control.Monad
-import Data.Int
+import Data.Serialize.Get
+import Data.Serialize.IEEE754
 import qualified Data.Vector as V
-import qualified Data.Vector.Storable as VS
+import qualified Data.Vector.Unboxed as VU
 import Data.Word
-import Foreign.ForeignPtr
-import Foreign.Marshal.Array
-import Foreign.Ptr
-import Foreign.Storable
-import Linear.V3
-import Studio
+import Linear
+import System.Directory
+import System.FilePath.Lens
 import System.IO.MMap
 
 data Studio = Studio
-  { _studioModels :: V.Vector Model,
+  { _studioBodyparts :: V.Vector Bodypart,
+    -- TODO: figure out why skins are indexed differently
     _studioTextures :: V.Vector Texture
   }
   deriving (Show)
 
 data Texture = Texture
-  deriving (Show)
-
-newtype Bodypart = Bodypart
-  { _bodypartModels :: V.Vector Model
-  } deriving (Show)
-
-data Model = Model
-  { _modelVerts :: VS.Vector (V3 Float),
-    _modelNorms :: VS.Vector (V3 Float),
-    _modelMeshes :: V.Vector Mesh
+  { _textureSize :: V2 Int,
+    _textureData :: [V3 Word8]
   }
   deriving (Show)
 
-newtype Mesh = Mesh
-  { _meshTris :: [Word16]
+data Bodypart = Bodypart
+  { _bodypartModels :: V.Vector Model,
+    _bodypartDefault :: Int
   }
   deriving (Show)
 
--- readStudio :: FilePath -> IO Studio
--- readStudio file = do
---   (ptr, 0, size) <- mmapFileForeignPtr file ReadOnly Nothing
---   let arr :: forall a o. (Storable a, Integral o) => o -> o -> IO (VS.Vector a)
---       arr off num = do
---         guard $
---           off >= 0 && num >= 0
---             && fromIntegral off + fromIntegral num * sizeOf (undefined :: a) < size
---         pure $
---           VS.unsafeFromForeignPtr0
---             (plusForeignPtr ptr (fromIntegral off))
---             (fromIntegral num)
+newtype Model = Model
+  { _modelMeshes :: V.Vector Mesh
+  }
+  deriving (Show)
 
---       sPeek :: forall a o. (Storable a, Integral o) => o -> IO a
---       sPeek off = withForeignPtr ptr \ptr' -> do
---         guard $ off >= 0 && fromIntegral off + sizeOf (undefined :: a) < size
---         peek (plusPtr ptr' (fromIntegral off))
+data Mesh = Mesh
+  { _meshTris :: [Vertex],
+    _meshSkin :: Int
+  }
+  deriving (Show)
 
---   header <- sPeek 0
+data Vertex = Vertex
+  { _vertexPos :: !(V3 Float),
+    _vertexNorm :: !(V3 Float),
+    _vertexUV :: !(V2 Word16)
+  }
+  deriving (Show)
 
---   guard $ c'studiohdr_t'numbodyparts header <= 1
---   bodypart <- sPeek (c'studiohdr_t'bodypartindex header)
+makeLenses ''Studio
+makeLenses ''Texture
+makeLenses ''Bodypart
+makeLenses ''Model
+makeLenses ''Mesh
 
-  -- guard $ c'studio
+bodypartDefaultModel :: Traversal' Bodypart Model
+bodypartDefaultModel f b = (bodypartModels . ix (_bodypartDefault b - 1)) f b
 
-  -- models <- peekArray
-  -- print (bodypart :: C'mstudiomodel_t)
-  
-  -- pure _
+readStudio :: FilePath -> IO Studio
+readStudio file = do
+  bs <- mmapFileByteString file Nothing
 
--- readMdl :: FilePath -> IO Model
--- readMdl file = do
---   header <- peek (castPtr ptr)
+  let fileT = file & basename %~ (<> "t")
+  textureFileEx <- doesFileExist fileT
+  extraTextures <-
+    if textureFileEx
+      then _studioTextures <$> readStudio fileT
+      else pure mempty
 
---   let peekIdx num idx a =
---         peekArray
---           (fromIntegral (num a))
---           (plusPtr ptr (fromIntegral (idx a)))
+  let seekGetVec get = do
+        num <- getInt32le
+        off <- getInt32le
+        seekGetVec' V.replicateM get num off
 
---   (bodypart : _) <- peekIdx c'studiohdr_t'numbodyparts c'studiohdr_t'bodypartindex header
---   (model : _) <- peekIdx c'mstudiobodyparts_t'nummodels c'mstudiobodyparts_t'modelindex bodypart
+      seekGetVec' rep get num off =
+        let g = do
+              skip (fromIntegral off)
+              rep (fromIntegral num) get
+         in either fail pure (runGet g bs)
 
---   let readMesh mesh = do
---         let start = plusPtr ptr (fromIntegral (c'mstudiomesh_t'triindex mesh))
---         Mesh <$> readTriCmd start
+  let r = flip runGet bs do
+        magic <- getBytes 4
+        version <- getInt32le
+        guard $ magic == "IDST" && version == 10
+        skip 0xac
+        _studioTextures <- seekGetVec getTexture
+        skip 0x10
+        _studioBodyparts <- seekGetVec getBodypart
+        pure (Studio {..})
 
---       readTriCmd p = do
---         len :: Int16 <- peek p
---         if len == 0
---           then pure []
---           else do
---             let (p' :: Ptr C'mstudiotrivert_t) = castPtr (advancePtr p 1)
---                 numtris = fromIntegral $ abs len
---             tris <- peekArray numtris p'
---             let cmd =
---                   (if len > 0 then TriCmdStrip else TriCmdFan)
---                     (map (fromIntegral . c'mstudiotrivert_t'vertindex) tris)
---             cmds <- readTriCmd (castPtr (advancePtr p' numtris))
---             pure $ cmd : cmds
+      getTexture = do
+        skip 0x44
+        width <- getInt32le
+        height <- getInt32le
+        off <- getInt32le
+        palette <- seekGetVec' VU.replicateM getPixel (0x100 :: Int) (off + width * height)
+        _textureData <- seekGetVec' replicateM (getIPixel palette) (width * height) off
+        let _textureSize = V2 (fromIntegral width) (fromIntegral height)
+        pure (Texture {..})
 
---   verts <- peekIdx c'mstudiomodel_t'numverts c'mstudiomodel_t'vertindex model
+      getPixel = V3 <$> getWord8 <*> getWord8 <*> getWord8
+      getIPixel pal = do i <- getWord8; pure $ pal VU.! fromIntegral i
 
---   meshes <-
---     peekIdx c'mstudiomodel_t'nummesh c'mstudiomodel_t'meshindex model
---       >>= traverse readMesh
+      getBodypart = do
+        -- Of course, this one array does not use the usual layout.
+        skip 0x40
+        num <- getInt32le
+        _bodypartDefault <- fromIntegral <$> getInt32le
+        off <- getInt32le
+        _bodypartModels <- seekGetVec' V.replicateM getModel num off
+        pure (Bodypart {..})
 
---   pure $ Model verts meshes
+      getModel = do
+        skip 0x48
+        nummesh <- getInt32le
+        meshindex <- getInt32le
+
+        numverts <- getInt32le
+        skip 0x4
+        vertindex <- getInt32le
+        modelVerts <- seekGetVec' VU.replicateM getV3 numverts vertindex
+
+        numnorms <- getInt32le
+        skip 0x4
+        normindex <- getInt32le
+        modelNorms <- seekGetVec' VU.replicateM getV3 numnorms normindex
+        skip 0x8
+
+        _modelMeshes <- seekGetVec' V.replicateM (getMesh modelVerts modelNorms) nummesh meshindex
+
+        pure (Model {..})
+
+      getV3 = liftA3 V3 getFloat32le getFloat32le getFloat32le
+
+      getMesh verts norms = do
+        skip 0x4
+        triindex <- fromIntegral <$> getInt32le
+        _meshTris <- either fail pure $ runGet (skip triindex *> getTris verts norms) bs
+        _meshSkin <- fromIntegral <$> getInt32le
+        skip 0x8
+        pure (Mesh {..})
+
+      getTris verts norms = do
+        len <- fromIntegral <$> getInt16le
+        if len == 0
+          then pure []
+          else do
+            let len' = abs len
+                getVert = do
+                  vertindex <- fromIntegral <$> getWord16le
+                  normindex <- fromIntegral <$> getWord16le
+                  st <- liftA2 V2 getWord16le getWord16le
+                  pure $ Vertex (verts VU.! vertindex) (norms VU.! normindex) st
+
+            l <- replicateM len' getVert
+            ls <- getTris verts norms
+            pure ((if len < 0 then fan else strip) l ++ ls)
+
+  studio <- either fail pure r
+  pure (studio & studioTextures %~ (extraTextures <>))
+
+strip :: [a] -> [a]
+strip [] = []
+strip [v0, v1, v2] = [v0, v1, v2]
+strip (v0 : v1 : v2 : v3 : vs) = v0 : v1 : v2 : v3 : v2 : v1 : strip (v2 : v3 : vs)
+strip _ = []
+
+fan :: [a] -> [a]
+fan (centre : rest) = go centre rest
+  where
+    go v0 [v1, v2] = [v0, v1, v2]
+    go v0 (v1 : v2 : vs) = v0 : v1 : v2 : go v0 (v2 : vs)
+    go _ _ = []
+fan _ = []

@@ -12,15 +12,13 @@ executable halflife
                     , JuicyPixels
                     , vector
                     , lens
-                    , attoparsec
                     , linear
-                    , bindings-DSL
                     , mmap
                     , ghc-heap-view
-    include-dirs: include
-    build-tool-depends: hsc2hs:hsc2hs
+                    , cereal
+                    , bytestring
+                    , directory
     hs-source-dirs:   app
     default-language: Haskell2010
     other-modules:    Mdl
-                    , Studio
                     , Render
