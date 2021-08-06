@@ -4,7 +4,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Mdl
+module Studio
   ( Studio,
     studioBodyparts,
     studioTextures,
@@ -20,7 +20,9 @@ module Mdl
     Mesh,
     meshSkin,
     meshTris,
+    meshNumTris,
     readStudio,
+    Vertex (Vertex),
   )
 where
 
@@ -62,7 +64,8 @@ newtype Model = Model
   deriving (Show)
 
 data Mesh = Mesh
-  { _meshTris :: [Vertex],
+  { _meshNumTris :: Int,
+    _meshTris :: [Vertex],
     _meshSkin :: Int
   }
   deriving (Show)
@@ -160,7 +163,7 @@ readStudio file = do
       getV3 = liftA3 V3 getFloat32le getFloat32le getFloat32le
 
       getMesh verts norms = do
-        skip 0x4
+        _meshNumTris <- fromIntegral <$> getInt32le
         triindex <- fromIntegral <$> getInt32le
         _meshTris <- either fail pure $ runGet (skip triindex *> getTris verts norms) bs
         _meshSkin <- fromIntegral <$> getInt32le
@@ -187,10 +190,14 @@ readStudio file = do
   pure (studio & studioTextures %~ (extraTextures <>))
 
 strip :: [a] -> [a]
-strip [] = []
-strip [v0, v1, v2] = [v0, v1, v2]
-strip (v0 : v1 : v2 : v3 : vs) = v0 : v1 : v2 : v3 : v2 : v1 : strip (v2 : v3 : vs)
-strip _ = []
+strip (v0' : v1' : vs') = goA v0' v1' vs'
+  where
+    goA _ _ [] = []
+    goA v0 v1 (v2 : vs) = v0 : v1 : v2 : goB v1 v2 vs
+
+    goB _ _ [] = []
+    goB v0 v1 (v2 : vs) = v1 : v0 : v2 : goA v1 v2 vs
+strip _ = error "strip"
 
 fan :: [a] -> [a]
 fan (centre : rest) = go centre rest
@@ -198,4 +205,4 @@ fan (centre : rest) = go centre rest
     go v0 [v1, v2] = [v0, v1, v2]
     go v0 (v1 : v2 : vs) = v0 : v1 : v2 : go v0 (v2 : vs)
     go _ _ = []
-fan _ = []
+fan _ = error "fan"
