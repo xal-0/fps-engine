@@ -1,6 +1,7 @@
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE PackageImports #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 
@@ -10,6 +11,7 @@ import Control.Lens
 import Control.Monad (unless, when)
 import Control.Monad.IO.Class
 import qualified Data.Atlas as AT
+import Data.Bool (bool)
 import Data.Foldable
 import qualified Data.Vector as V
 import Graphics.GL.Core45 (glDisable)
@@ -17,74 +19,111 @@ import Graphics.GL.Ext.ARB.FramebufferSRGB as G
 import Graphics.GPipe
 import qualified Graphics.GPipe.Context.GLFW as GLFW
 import Studio
-import System.Environment (getArgs)
 
-data Env os = Env
-  { _viewportSize :: V2 Int,
-    _matBuf :: Buffer os (Uniform (M44 (B Float))),
-    _modelPrim :: PrimitiveArray Triangles (B3 Float, B3 Float, B2 Float),
-    _modelTexture :: Texture2D os (Format RGBFloat)
+data State = State
+  { _statePos :: V3 Float,
+    _stateLook :: V2 Float, -- yaw, pitch
+    _statePrevMouse :: V2 Float
   }
 
-main :: IO ()
-main = do
-  [file] <- getArgs
+makeLenses ''State
 
+data Env os = Env
+  { _envViewport :: V2 Int,
+    _envMat :: Buffer os (Uniform (M44 (B Float))),
+    _envModelPrim :: PrimitiveArray Triangles (B3 Float, B3 Float, B2 Float),
+    _envModelTexture :: Texture2D os (Format RGBFloat)
+  }
+
+makeLenses ''Env
+
+main :: IO ()
+main =
   runContextT GLFW.defaultHandleConfig $ do
     win <-
       newWindow
         (WindowFormatColorDepth RGB8 Depth16)
-        ((GLFW.defaultWindowConfig "gun") {GLFW.configHeight = 500, GLFW.configWidth = 500})
+        ((GLFW.defaultWindowConfig "gun") {GLFW.configHeight = 720, GLFW.configWidth = 1080})
+
+    Just () <- GLFW.setCursorInputMode win GLFW.CursorInputMode'Disabled
 
     when G.gl_ARB_framebuffer_sRGB $
       glDisable G.GL_FRAMEBUFFER_SRGB
 
-    (modelBuf, modelTexture) <- loadMdl file
+    (modelBuf, modelTexture) <- loadMdl "v_mp5.mdl"
 
     shader <- compileShader do
-      prim <- toPrimitiveStream _modelPrim
-      mat <- getUniform ((,0) . _matBuf)
+      prim <- toPrimitiveStream _envModelPrim
+      mat <- getUniform ((,0) . _envMat)
 
-      let shadeVertex (vert, _, uv) = (vert', (uv, (vert' ^. _z + 1) / 3))
+      let shadeVertex (vert, n, uv) = (vert', (n, uv))
             where
               vert' = mat !* point vert
-          rastSettings s = (FrontAndBack, PolygonFill, ViewPort (V2 0 0) (_viewportSize s), DepthRange 0 1)
+          rastSettings s = (FrontAndBack, PolygonFill, ViewPort (V2 0 0) (s ^. envViewport), DepthRange 0 1)
 
       frag <- rasterize rastSettings (fmap shadeVertex prim)
 
       sampler <- newSampler2D \s ->
-        (_modelTexture s, SamplerNearest, (V2 ClampToEdge ClampToEdge, undefined))
-      let shadeFrag (uv, z) = (sample2D sampler SampleAuto Nothing Nothing uv, z)
+        (s ^. envModelTexture, SamplerNearest, (V2 ClampToEdge ClampToEdge, undefined))
+      let shadeFrag (n, uv) info =
+            ( sample2D sampler SampleAuto Nothing Nothing uv,
+              rasterizedFragCoord info ^. _z
+            )
           drawSettings _ =
             ( win,
               ContextColorOption NoBlending (V3 True True True),
-              DepthOption Greater True
+              DepthOption Less True
             )
 
-      drawWindowColorDepth drawSettings (fmap shadeFrag frag)
+      drawWindowColorDepth drawSettings (withRasterizedInfo shadeFrag frag)
 
     matBuf :: Buffer os (Uniform (M44 (B Float))) <- newBuffer 1
 
-    let extraR = axisAngle (V3 0 1 0) 0.015
-        scale = m33_to_m44 (scaled (recip 30))
-        loop rot = do
-          Just (sizex, sizey) <- GLFW.getWindowSize win
-          writeBuffer matBuf 0 [mkTransformation rot (V3 0 0 0) !*! scale]
+    let sensitivity = 0.005
+        vel = 0.5
+        loop state = do
+          Just mouse' <- fmap (fmap (\(x, y) -> V2 (realToFrac x) (realToFrac y))) (GLFW.getCursorPos win)
+          Just (sizeX, sizeY) <- GLFW.getWindowSize win
+
+          [wkey, akey, skey, dkey] <-
+            traverse (GLFW.getKey win) [GLFW.Key'W, GLFW.Key'A, GLFW.Key'S, GLFW.Key'D]
+              & fmap (fmap (== Just GLFW.KeyState'Pressed))
+
+          let mdelta = mouse' - state ^. statePrevMouse
+              look' = state ^. stateLook - (mdelta * sensitivity) & _2 %~ \pitch -> clamp (- pi / 2) pitch (pi / 2)
+              rot = axisAngle (V3 0 1 0) (look' ^. _1) * axisAngle (V3 1 0 0) (look' ^. _2)
+              forward = rotate rot (V3 0 0 (-1))
+              right = rotate rot (V3 1 0 0)
+              up = rotate rot (V3 0 1 0)
+              pos' =
+                state ^. statePos + forward * vel * (bool 0 1 wkey + bool 0 (-1) skey)
+                  + right * vel * (bool 0 1 dkey + bool 0 (-1) akey)
+              lookm = lookAt pos' (pos' + forward) (- up)
+              aspect = fromIntegral sizeX / fromIntegral sizeY
+              perspect = perspective 80 aspect 1 1000
+
+          writeBuffer matBuf 0 [perspect !*! lookm]
 
           render do
             clearWindowColor win (V3 0.25 0.25 0.25)
-            clearWindowDepth win (-1)
+            clearWindowDepth win 1
             modelVerts <- newVertexArray modelBuf
             let modelPrim = toPrimitiveArray TriangleList modelVerts
-            shader (Env (V2 sizex sizey) matBuf modelPrim modelTexture)
+            shader (Env (V2 sizeX sizeY) matBuf modelPrim modelTexture)
+
+          let state' =
+                state
+                  & statePrevMouse .~ mouse'
+                  & stateLook .~ look'
+                  & statePos .~ pos'
 
           swapWindowBuffers win
           closeRequested <- GLFW.windowShouldClose win
           unless
             (closeRequested == Just True)
-            (loop (extraR * rot))
+            (loop state')
 
-    loop (Quaternion 1 (V3 0 0 0) :: Quaternion Float)
+    loop (State (V3 0 0 20) (V2 0 0) 0)
 
 loadMdl ::
   ContextHandler ctx =>
@@ -104,8 +143,7 @@ loadMdl file = do
     Right locs <- AT.pack atlas (view (textureSize . v2pt)) (\_ _ -> ()) const textures
     pure (fmap (review v2pt) locs)
 
-  let meshesF = meshes
-      meshes' = concatMap (\m -> fmap (updateMesh (m ^. meshSkin)) (m ^. meshTris)) meshesF
+  let meshes' = concatMap (\m -> fmap (updateMesh (m ^. meshSkin)) (m ^. meshTris)) meshes
       updateMesh skin (Vertex v n uv) =
         ( v,
           n,
