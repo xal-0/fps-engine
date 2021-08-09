@@ -19,6 +19,7 @@ import Graphics.GL.Ext.ARB.FramebufferSRGB as G
 import Graphics.GPipe
 import qualified Graphics.GPipe.Context.GLFW as GLFW
 import Studio
+import Graphics.GPipe.Internal.Expr (normalize3)
 
 data State = State
   { _statePos :: V3 Float,
@@ -45,12 +46,12 @@ main =
         (WindowFormatColorDepth RGB8 Depth16)
         ((GLFW.defaultWindowConfig "gun") {GLFW.configHeight = 720, GLFW.configWidth = 1080})
 
-    Just () <- GLFW.setCursorInputMode win GLFW.CursorInputMode'Disabled
+    -- Just () <- GLFW.setCursorInputMode win GLFW.CursorInputMode'Disabled
 
     when G.gl_ARB_framebuffer_sRGB $
       glDisable G.GL_FRAMEBUFFER_SRGB
 
-    (modelBuf, modelTexture) <- loadMdl "v_mp5.mdl"
+    (modelBuf, modelTexture) <- loadMdl "models/halflife/v_mp5.mdl"
 
     shader <- compileShader do
       prim <- toPrimitiveStream _envModelPrim
@@ -66,7 +67,7 @@ main =
       sampler <- newSampler2D \s ->
         (s ^. envModelTexture, SamplerNearest, (V2 ClampToEdge ClampToEdge, undefined))
       let shadeFrag (n, uv) info =
-            ( sample2D sampler SampleAuto Nothing Nothing uv,
+            ( sample2D sampler SampleAuto Nothing Nothing uv ^* clamp 0 (dot n (normalize3 (V3 0 40 30)) + 0.9) 1,
               rasterizedFragCoord info ^. _z
             )
           drawSettings _ =
@@ -102,7 +103,7 @@ main =
               aspect = fromIntegral sizeX / fromIntegral sizeY
               perspect = perspective 80 aspect 1 1000
 
-          writeBuffer matBuf 0 [perspect !*! lookm]
+          writeBuffer matBuf 0 [perspect !*! mkTransformation (axisAngle (V3 1 0 0) (pi/2)) (V3 (-4) (7) (-6)) !*! m33_to_m44 (scaled (V3 (-1) 1 1))]
 
           render do
             clearWindowColor win (V3 0.25 0.25 0.25)
@@ -143,8 +144,8 @@ loadMdl file = do
     Right locs <- AT.pack atlas (view (textureSize . v2pt)) (\_ _ -> ()) const textures
     pure (fmap (review v2pt) locs)
 
-  let meshes' = concatMap (\m -> fmap (updateMesh (m ^. meshSkin)) (m ^. meshTris)) meshes
-      updateMesh skin (Vertex v n uv) =
+  let meshes' = concatMap (\m -> fmap (updateMesh (m ^. meshSkin)) (m ^.. meshTris)) meshes
+      updateMesh skin (Vertex v n uv _ _) =
         ( v,
           n,
           fmap fromIntegral ((locs V.! skin) + fmap fromIntegral uv) / fromIntegral minsize
@@ -155,7 +156,7 @@ loadMdl file = do
 
   texture <- newTexture2D RGB8 (V2 minsize minsize) 1
   forM_ (zip (toList textures) (toList locs)) \(t, pos) ->
-    writeTexture2D texture 0 pos (t ^. textureSize) (t ^. textureData)
+    writeTexture2D texture 0 pos (t ^. textureSize) (t ^.. texturePixels)
 
   pure (modelVerts, texture)
 

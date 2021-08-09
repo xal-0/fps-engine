@@ -243,14 +243,19 @@ typedef struct
 
 typedef struct
 {
+  /* X Y Z XR YR ZR.  The offset is from the beginning of this struct
+     to an mstudioanimvalue_t command list.  If the offset is zero, we
+     leave this blend at the default for the bones. */
 	unsigned short	offset[6];
 } mstudioanim_t;
 
 // animation frames
 typedef union 
 {
+  struct {
 	char	valid;
 	char	total;
+  } num;
 	short		value;
 } mstudioanimvalue_t;
 
