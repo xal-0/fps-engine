@@ -1,4 +1,5 @@
 {-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PackageImports #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -18,8 +19,9 @@ import Graphics.GL.Core45 (glDisable)
 import Graphics.GL.Ext.ARB.FramebufferSRGB as G
 import Graphics.GPipe
 import qualified Graphics.GPipe.Context.GLFW as GLFW
-import Studio
 import Graphics.GPipe.Internal.Expr (normalize3)
+import Studio
+import Data.Word
 
 data State = State
   { _statePos :: V3 Float,
@@ -78,7 +80,7 @@ main =
 
       drawWindowColorDepth drawSettings (withRasterizedInfo shadeFrag frag)
 
-    matBuf :: Buffer os (Uniform (M44 (B Float))) <- newBuffer 1
+    matBuf <- newBuffer 1
 
     let sensitivity = 0.005
         vel = 0.5
@@ -103,7 +105,7 @@ main =
               aspect = fromIntegral sizeX / fromIntegral sizeY
               perspect = perspective 80 aspect 1 1000
 
-          writeBuffer matBuf 0 [perspect !*! mkTransformation (axisAngle (V3 1 0 0) (pi/2)) (V3 (-4) (7) (-6)) !*! m33_to_m44 (scaled (V3 (-1) 1 1))]
+          writeBuffer matBuf 0 [perspect !*! mkTransformation (axisAngle (V3 1 0 0) (pi / 2)) (V3 (-4) 7 (-8)) !*! m33_to_m44 (scaled (V3 (-1) 1 1))]
 
           render do
             clearWindowColor win (V3 0.25 0.25 0.25)
