@@ -42,24 +42,22 @@ where
 import Control.Applicative
 import Control.Lens
 import Control.Monad
+import Data.Binary.Get
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as B
-import Data.Either (fromRight)
+import qualified Data.ByteString.Lazy as BL
 import Data.Int
-import Data.Serialize.Get
-import Data.Serialize.IEEE754
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import Data.Word
+import Debug.Trace (traceM)
 import Foreign (Storable (sizeOf), plusForeignPtr)
 import Foreign.ForeignPtr (castForeignPtr)
 import Linear hiding (trace)
 import System.Directory
 import System.FilePath.Lens
-import System.IO.MMap
-import Debug.Trace (traceM)
 
 data Studio = Studio
   { _studioName :: T.Text,
@@ -87,7 +85,7 @@ newtype Model = Model
 
 data Mesh = Mesh
   { _meshNumTris :: Int,
-    _meshData :: B.ByteString,
+    _meshData :: BL.ByteString,
     _meshSkin :: Int,
     _meshVerts :: VS.Vector (V3 Float),
     _meshVertInfo :: VS.Vector Word8,
@@ -117,7 +115,7 @@ data Bone = Bone
 data Seq = Seq
   { _seqName :: T.Text,
     _seqFps :: Float,
-    _seqKeyframes :: V.Vector (Keyframe (Maybe B.ByteString)),
+    _seqKeyframes :: V.Vector (Keyframe (Maybe BL.ByteString)),
     _seqNumFrames :: Int
   }
 
@@ -136,7 +134,7 @@ makeLenses ''Seq
 
 readStudio :: FilePath -> IO Studio
 readStudio file = do
-  bs <- mmapFileByteString file Nothing
+  bs <- BL.readFile file
 
   let fileT = file & basename %~ (<> "t")
   textureFileEx <- doesFileExist fileT
@@ -147,26 +145,27 @@ readStudio file = do
 
   let seekGetVec get = do
         num <- getInt32le
-        off <- getInt32le
-        seekGetVec' get num off
+        seekGetVec' get num <$> getInt32le
 
       seekGetVec' get num off =
         let g = do
               skip (fromIntegral off)
               V.replicateM (fromIntegral num) get
-         in either fail pure (runGet g bs)
+         in runGet g bs
 
       seekGetVecS :: forall a n. (Storable a, Integral n) => n -> n -> VS.Vector a
       seekGetVecS num off =
         byteStringToVector
-          ( B.take
-              (fromIntegral num * sizeOf (undefined :: a))
-              (B.drop (fromIntegral off) bs)
+          ( BL.toStrict
+              ( BL.take
+                  (fromIntegral num * fromIntegral (sizeOf (undefined :: a)))
+                  (BL.drop (fromIntegral off) bs)
+              )
           )
           (fromIntegral num)
 
   let r = flip runGet bs do
-        magic <- getBytes 4
+        magic <- getByteString 4
         version <- getInt32le
         guard $ magic == "IDST" && version == 10
         _studioName <- getName 0x40
@@ -199,7 +198,7 @@ readStudio file = do
         num <- getInt32le
         _bodypartDefault <- fromIntegral <$> getInt32le
         off <- getInt32le
-        _bodypartModels <- seekGetVec' getModel num off
+        let _bodypartModels = seekGetVec' getModel num off
         pure (Bodypart {..})
 
       getModel = do
@@ -222,18 +221,18 @@ readStudio file = do
 
         skip 0x8
 
-        _modelMeshes <-
-          seekGetVec'
-            (getMesh _meshVerts _meshVertInfo _meshNorms _meshNormInfo)
-            nummesh
-            meshindex
+        let _modelMeshes =
+              seekGetVec'
+                (getMesh _meshVerts _meshVertInfo _meshNorms _meshNormInfo)
+                nummesh
+                meshindex
 
         pure (Model {..})
 
       getMesh _meshVerts _meshVertInfo _meshNorms _meshNormInfo = do
         _meshNumTris <- fromIntegral <$> getInt32le
         triindex <- getInt32le
-        let _meshData = B.drop (fromIntegral triindex) bs
+        let _meshData = BL.drop (fromIntegral triindex) bs
         _meshSkin <- fromIntegral <$> getInt32le
         skip 0x8
         pure (Mesh {..})
@@ -250,7 +249,7 @@ readStudio file = do
 
       getSeq numbones = do
         _seqName <- getName 32
-        _seqFps <- getFloat32le
+        _seqFps <- getFloatle
 
         skip 0xc
         skip 0x8 -- events
@@ -261,7 +260,7 @@ readStudio file = do
         guard $ numblends == 1
 
         animindex <- getWord32le
-        _seqKeyframes <- seekGetVec' getKeyframes numbones animindex
+        let _seqKeyframes = seekGetVec' getKeyframes numbones animindex
 
         skip 0x30
 
@@ -287,16 +286,15 @@ readStudio file = do
         off <- getWord16le
         if off == 0
           then pure Nothing
-          else pure . Just $ B.drop (fromIntegral $ base + fromIntegral off) bs
+          else pure . Just $ BL.drop (fromIntegral $ base + fromIntegral off) bs
 
-  studio <- either fail pure r
-  pure (studio & studioTextures %~ (<> extraTextures))
+  pure (r & studioTextures %~ (<> extraTextures))
 
 getV3 :: Get (V3 Float)
-getV3 = V3 <$> getFloat32le <*> getFloat32le <*> getFloat32le
+getV3 = V3 <$> getFloatle <*> getFloatle <*> getFloatle
 
 getName :: Int -> Get T.Text
-getName len = T.decodeUtf8 . B.takeWhile (/= 0) <$> getBytes len
+getName len = T.decodeUtf8 . B.takeWhile (/= 0) <$> getByteString len
 
 bodypartDefaultModel :: Traversal' Bodypart Model
 bodypartDefaultModel f b = (bodypartModels . ix (_bodypartDefault b - 1)) f b
@@ -307,7 +305,7 @@ texturePixels = folding f
     f Texture {..} = map ((_texturePalette VS.!) . fromIntegral) (VS.toList _textureIndices)
 
 meshTris :: Fold Mesh Vertex
-meshTris = folding (fromRight [] . unpackTris)
+meshTris = folding unpackTris
   where
     unpackTris mesh@Mesh {..} = runGet (getTris mesh) _meshData
 
@@ -388,8 +386,8 @@ seqAnim bones animseq = getZipList $ fmap (skeletonConfig bones) keyframes
     boneAdjs n Nothing = ZipList (replicate n 0)
     boneAdjs n (Just b) = ZipList (animValues n b)
 
-animValues :: Int -> B.ByteString -> [Int16]
-animValues numframes b = fromRight (error "animValues") (runGet (getValue numframes) b)
+animValues :: Int -> BL.ByteString -> [Int16]
+animValues numframes = runGet (getValue numframes)
   where
     getValue 0 = pure []
     getValue left = do
