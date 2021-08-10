@@ -11,6 +11,7 @@ executable halflife
                     , JuicyPixels
                     , atlas
                     , bytestring
+                    , cereal
                     , directory
                     , ghc-heap-view
                     , gl
@@ -19,7 +20,6 @@ executable halflife
                     , mmap
                     , text
                     , vector
-                    , binary
     hs-source-dirs:   app
     default-language: Haskell2010
     other-modules:    Studio
