@@ -334,7 +334,6 @@ getTris verts vertInfo norms normInfo = do
     let len' = abs len
         getVert = do
           vertindex <- fromIntegral <$> lift getWord16le
-          traceM $ "got vertindex at " <> show vertindex
           normindex <- fromIntegral <$> lift getWord16le
           st <- lift $ liftA2 V2 getWord16le getWord16le
           yield $
@@ -347,6 +346,7 @@ getTris verts vertInfo norms normInfo = do
               }
 
     replicateM_ len' getVert >-> if len > 0 then strip else fan
+    getTris verts vertInfo norms normInfo
 
 strip :: Monad m => Pipe a a m r
 strip = do
