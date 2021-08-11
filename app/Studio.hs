@@ -2,6 +2,8 @@
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -42,6 +44,7 @@ where
 import Control.Applicative
 import Control.Lens
 import Control.Monad
+import Control.Monad.State
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as B
 import Data.Either (fromRight)
@@ -53,13 +56,15 @@ import qualified Data.Text.Encoding as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import Data.Word
+import Debug.Trace (traceM, traceShowM)
 import Foreign (Storable (sizeOf), plusForeignPtr)
 import Foreign.ForeignPtr (castForeignPtr)
 import Linear hiding (trace)
+import Pipes
+import Pipes.Lift
 import System.Directory
 import System.FilePath.Lens
 import System.IO.MMap
-import Debug.Trace (traceM)
 
 data Studio = Studio
   { _studioName :: T.Text,
@@ -87,12 +92,8 @@ newtype Model = Model
 
 data Mesh = Mesh
   { _meshNumTris :: Int,
-    _meshData :: B.ByteString,
-    _meshSkin :: Int,
-    _meshVerts :: VS.Vector (V3 Float),
-    _meshVertInfo :: VS.Vector Word8,
-    _meshNorms :: VS.Vector (V3 Float),
-    _meshNormInfo :: VS.Vector Word8
+    _meshTris :: Producer Vertex Identity (),
+    _meshSkin :: Int
   }
 
 data Vertex = Vertex
@@ -145,16 +146,16 @@ readStudio file = do
       then _studioTextures <$> readStudio fileT
       else pure mempty
 
-  let seekGetVec get = do
+  let seekGetVec g = do
         num <- getInt32le
         off <- getInt32le
-        seekGetVec' get num off
+        seekGetVec' g num off
 
-      seekGetVec' get num off =
-        let g = do
+      seekGetVec' g num off =
+        let g' = do
               skip (fromIntegral off)
-              V.replicateM (fromIntegral num) get
-         in either fail pure (runGet g bs)
+              V.replicateM (fromIntegral num) g
+         in either fail pure (runGet g' bs)
 
       seekGetVecS :: forall a n. (Storable a, Integral n) => n -> n -> VS.Vector a
       seekGetVecS num off =
@@ -210,32 +211,38 @@ readStudio file = do
         vertinfoindex <- getInt32le
         vertindex <- getInt32le
 
-        let _meshVerts = seekGetVecS numverts vertindex
-            _meshVertInfo = seekGetVecS numverts vertinfoindex
+        let verts = seekGetVecS numverts vertindex
+            vertInfo = seekGetVecS numverts vertinfoindex
 
         numnorms <- getInt32le
         norminfoindex <- getInt32le
         normindex <- getInt32le
 
-        let _meshNorms = seekGetVecS numnorms normindex
-            _meshNormInfo = seekGetVecS numnorms norminfoindex
+        let norms = seekGetVecS numnorms normindex
+            normInfo = seekGetVecS numnorms norminfoindex
 
         skip 0x8
 
         _modelMeshes <-
           seekGetVec'
-            (getMesh _meshVerts _meshVertInfo _meshNorms _meshNormInfo)
+            (getMesh verts vertInfo norms normInfo)
             nummesh
             meshindex
 
         pure (Model {..})
 
-      getMesh _meshVerts _meshVertInfo _meshNorms _meshNormInfo = do
+      getMesh verts vertInfo norms normInfo = do
         _meshNumTris <- fromIntegral <$> getInt32le
         triindex <- getInt32le
-        let _meshData = B.drop (fromIntegral triindex) bs
         _meshSkin <- fromIntegral <$> getInt32le
         skip 0x8
+
+        let meshData = B.drop (fromIntegral triindex) bs
+            _meshTris =
+              runGetPipe
+                (getTris verts vertInfo norms normInfo)
+                meshData
+
         pure (Mesh {..})
 
       getBone = do
@@ -298,6 +305,15 @@ getV3 = V3 <$> getFloat32le <*> getFloat32le <*> getFloat32le
 getName :: Int -> Get T.Text
 getName len = T.decodeUtf8 . B.takeWhile (/= 0) <$> getBytes len
 
+runGetPipe :: Monad m => Proxy a' a b' b Get r -> B.ByteString -> Proxy a' a b' b m r
+runGetPipe p = evalStateT (distribute (hoist f p))
+  where
+    f g = do
+      s <- get
+      let Right (x, s') = runGetState g s 0
+      put s'
+      pure x
+
 bodypartDefaultModel :: Traversal' Bodypart Model
 bodypartDefaultModel f b = (bodypartModels . ix (_bodypartDefault b - 1)) f b
 
@@ -306,52 +322,64 @@ texturePixels = folding f
   where
     f Texture {..} = map ((_texturePalette VS.!) . fromIntegral) (VS.toList _textureIndices)
 
-meshTris :: Fold Mesh Vertex
-meshTris = folding (fromRight [] . unpackTris)
+getTris ::
+  VS.Vector (V3 Float) ->
+  VS.Vector Word8 ->
+  VS.Vector (V3 Float) ->
+  VS.Vector Word8 ->
+  Producer Vertex Get ()
+getTris verts vertInfo norms normInfo = do
+  len <- fromIntegral <$> lift getInt16le
+  unless (len == 0) do
+    let len' = abs len
+        getVert = do
+          vertindex <- fromIntegral <$> lift getWord16le
+          traceM $ "got vertindex at " <> show vertindex
+          normindex <- fromIntegral <$> lift getWord16le
+          st <- lift $ liftA2 V2 getWord16le getWord16le
+          yield $
+            Vertex
+              { _vertexPos = verts VS.! vertindex,
+                _vertexNorm = norms VS.! normindex,
+                _vertexUV = st,
+                _vertexBone = fromIntegral (vertInfo VS.! vertindex),
+                _vertexNormBone = fromIntegral (normInfo VS.! normindex)
+              }
+
+    replicateM_ len' getVert >-> if len > 0 then strip else fan
+
+strip :: Monad m => Pipe a a m r
+strip = do
+  v0 <- await
+  v1 <- await
+  goA v0 v1
   where
-    unpackTris mesh@Mesh {..} = runGet (getTris mesh) _meshData
+    goA v0 v1 = do
+      v2 <- await
+      yield v0
+      yield v1
+      yield v2
+      goB v1 v2
 
-    getTris mesh@Mesh {..} = do
-      len <- fromIntegral <$> getInt16le
-      if len == 0
-        then pure []
-        else do
-          let len' = abs len
-              getVert = do
-                vertindex <- fromIntegral <$> getWord16le
-                normindex <- fromIntegral <$> getWord16le
-                st <- liftA2 V2 getWord16le getWord16le
-                traceM "aaa"
-                pure $
-                  Vertex
-                    { _vertexPos = _meshVerts VS.! vertindex,
-                      _vertexNorm = _meshNorms VS.! normindex,
-                      _vertexUV = st,
-                      _vertexBone = fromIntegral (_meshVertInfo VS.! vertindex),
-                      _vertexNormBone = fromIntegral (_meshNormInfo VS.! normindex)
-                    }
+    goB v0 v1 = do
+      v2 <- await
+      yield v1
+      yield v0
+      yield v2
+      goA v1 v2
 
-          l <- replicateM len' getVert
-          ls <- getTris mesh
-          pure ((if len < 0 then fan else strip) l ++ ls)
+fan :: Monad m => Pipe a a m r
+fan = do
+  centre <- await
+  let go v1 = do
+        v2 <- await
+        yield centre
+        yield v1
+        yield v2
+        go v2
 
-strip :: [a] -> [a]
-strip (v0' : v1' : vs') = goA v0' v1' vs'
-  where
-    goA _ _ [] = []
-    goA v0 v1 (v2 : vs) = v0 : v1 : v2 : goB v1 v2 vs
-
-    goB _ _ [] = []
-    goB v0 v1 (v2 : vs) = v1 : v0 : v2 : goA v1 v2 vs
-strip _ = error "strip"
-
-fan :: [a] -> [a]
-fan (centre : rest) = go centre rest
-  where
-    go v0 [v1, v2] = [v0, v1, v2]
-    go v0 (v1 : v2 : vs) = v0 : v1 : v2 : go v0 (v2 : vs)
-    go _ _ = []
-fan _ = error "fan"
+  v1 <- await
+  go v1
 
 byteStringToVector :: forall a. (Storable a) => B.ByteString -> Int -> VS.Vector a
 byteStringToVector bs len = vec

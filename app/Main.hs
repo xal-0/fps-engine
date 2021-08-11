@@ -15,13 +15,15 @@ import qualified Data.Atlas as AT
 import Data.Bool (bool)
 import Data.Foldable
 import qualified Data.Vector as V
+import Data.Word
 import Graphics.GL.Core45 (glDisable)
 import Graphics.GL.Ext.ARB.FramebufferSRGB as G
 import Graphics.GPipe
 import qualified Graphics.GPipe.Context.GLFW as GLFW
 import Graphics.GPipe.Internal.Expr (normalize3)
+import Pipes as P
+import qualified Pipes.Prelude as P
 import Studio
-import Data.Word
 
 data State = State
   { _statePos :: V3 Float,
@@ -146,15 +148,22 @@ loadMdl file = do
     Right locs <- AT.pack atlas (view (textureSize . v2pt)) (\_ _ -> ()) const textures
     pure (fmap (review v2pt) locs)
 
-  let meshes' = concatMap (\m -> fmap (updateMesh (m ^. meshSkin)) (m ^.. meshTris)) meshes
-      updateMesh skin (Vertex v n uv _ _) =
-        ( v,
-          n,
-          fmap fromIntegral ((locs V.! skin) + fmap fromIntegral uv) / fromIntegral minsize
-        )
+  -- let meshes' = concatMap (\m -> fmap (updateMesh (m ^. meshSkin)) (m ^.. meshTris)) meshes
+  --     updateMesh skin (Vertex v n uv _ _) =
+  --       ( v,
+  --         n,
+  --         fmap fromIntegral ((locs V.! skin) + fmap fromIntegral uv) / fromIntegral minsize
+  --       )
+
+  let vertices = P.toList $ P.each meshes `for` updateMesh
+      updateMesh m = m ^. meshTris >-> P.map (updateVertex m)
+      updateVertex m (Vertex v n uv _ _) = (v, n, fuv m uv)
+      fuv m uv =
+        fmap fromIntegral ((locs V.! (m ^. meshSkin)) + fmap fromIntegral uv)
+          / fromIntegral minsize
 
   modelVerts <- newBuffer (sumOf (traverse . meshNumTris) meshes * 3)
-  writeBuffer modelVerts 0 meshes'
+  writeBuffer modelVerts 0 vertices
 
   texture <- newTexture2D RGB8 (V2 minsize minsize) 1
   forM_ (zip (toList textures) (toList locs)) \(t, pos) ->
