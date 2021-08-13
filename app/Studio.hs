@@ -6,6 +6,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -38,6 +39,7 @@ module Studio
     seqFps,
     seqNumFrames,
     seqAnim,
+    SkelTransform
   )
 where
 
@@ -47,7 +49,6 @@ import Control.Monad
 import Control.Monad.State
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as B
-import Data.Either (fromRight)
 import Data.Int
 import Data.Serialize.Get
 import Data.Serialize.IEEE754
@@ -56,15 +57,18 @@ import qualified Data.Text.Encoding as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import Data.Word
-import Debug.Trace (traceM, traceShowM)
 import Foreign (Storable (sizeOf), plusForeignPtr)
 import Foreign.ForeignPtr (castForeignPtr)
 import Linear hiding (trace)
-import Pipes
+import Pipes as P
 import Pipes.Lift
+import qualified Pipes.Prelude as P
 import System.Directory
 import System.FilePath.Lens
 import System.IO.MMap
+import Text.Printf (printf)
+
+type SkelTransform = (Quaternion Float, V3 Float)
 
 data Studio = Studio
   { _studioName :: T.Text,
@@ -77,8 +81,7 @@ data Studio = Studio
 
 data Texture = Texture
   { _textureSize :: V2 Int,
-    _textureIndices :: VS.Vector Word8,
-    _texturePalette :: VS.Vector (V3 Word8)
+    _texturePixels :: Producer (V3 Word8) Identity ()
   }
 
 data Bodypart = Bodypart
@@ -118,8 +121,8 @@ data Bone = Bone
 data Seq = Seq
   { _seqName :: T.Text,
     _seqFps :: Float,
-    _seqKeyframes :: V.Vector (Keyframe (Maybe B.ByteString)),
-    _seqNumFrames :: Int
+    _seqNumFrames :: Int,
+    _seqAnim :: Producer (V.Vector SkelTransform) Identity ()
   }
 
 data Keyframe a = Keyframe
@@ -176,7 +179,7 @@ readStudio file = do
         _studioBones <- seekGetVec getBone
 
         skip 0x10
-        _studioSeqs <- seekGetVec (getSeq (V.length _studioBones))
+        _studioSeqs <- seekGetVec (getSeq _studioBones)
         skip 0x8
 
         _studioTextures <- seekGetVec getTexture
@@ -190,8 +193,12 @@ readStudio file = do
         height <- getInt32le
         off <- getInt32le
         let _textureSize = V2 (fromIntegral width) (fromIntegral height)
-            _texturePalette = seekGetVecS 0x100 (off + width * height)
-            _textureIndices = seekGetVecS (width * height) off
+            texturePalette :: VS.Vector (V3 Word8) = seekGetVecS 0x100 (off + width * height)
+            textureIndices :: VS.Vector Word8 = seekGetVecS (width * height) off
+            _texturePixels =
+              P.each (VS.toList textureIndices)
+                >-> P.map ((texturePalette VS.!) . fromIntegral)
+
         pure (Texture {..})
 
       getBodypart = do
@@ -255,7 +262,7 @@ readStudio file = do
         _boneScaleRot <- getV3
         pure (Bone {..})
 
-      getSeq numbones = do
+      getSeq bones = do
         _seqName <- getName 32
         _seqFps <- getFloat32le
 
@@ -268,7 +275,8 @@ readStudio file = do
         guard $ numblends == 1
 
         animindex <- getWord32le
-        _seqKeyframes <- seekGetVec' getKeyframes numbones animindex
+        keyframeData <- seekGetVec' getKeyframes (V.length bones) animindex
+        let _seqAnim = pSeqAnim bones _seqNumFrames keyframeData
 
         skip 0x30
 
@@ -316,11 +324,6 @@ runGetPipe p = evalStateT (distribute (hoist f p))
 
 bodypartDefaultModel :: Traversal' Bodypart Model
 bodypartDefaultModel f b = (bodypartModels . ix (_bodypartDefault b - 1)) f b
-
-texturePixels :: Fold Texture (V3 Word8)
-texturePixels = folding f
-  where
-    f Texture {..} = map ((_texturePalette VS.!) . fromIntegral) (VS.toList _textureIndices)
 
 getTris ::
   VS.Vector (V3 Float) ->
@@ -402,36 +405,55 @@ eulerToQuat (V3 roll pitch yaw) = Quaternion qw (V3 qx qy qz)
     qy = cr * sp * cy + sr * cp * sy
     qz = cr * cp * sy - sr * sp * cy
 
-type SkelTransform = (Quaternion Float, V3 Float)
-
 type SkelAdjustment = Keyframe Int16
 
-seqAnim :: V.Vector Bone -> Seq -> [V.Vector SkelTransform]
-seqAnim bones animseq = getZipList $ fmap (skeletonConfig bones) keyframes
+pSeqAnim ::
+  Monad m =>
+  V.Vector Bone ->
+  Int ->
+  V.Vector (Keyframe (Maybe B.ByteString)) ->
+  Producer (V.Vector SkelTransform) m ()
+pSeqAnim bones numFrames keyframeData = keyframes >-> P.map (skeletonConfig bones)
   where
-    keyframes = traverse boneKeyframes (animseq ^. seqKeyframes)
+    keyframes = zipP (fmap (boneKeyframes numFrames) keyframeData)
 
-    boneKeyframes kf = traverse (boneAdjs (_seqNumFrames animseq)) kf
+    boneKeyframes n kf = zipP (fmap (boneAdjs n) kf)
 
-    boneAdjs n Nothing = ZipList (replicate n 0)
-    boneAdjs n (Just b) = ZipList (animValues n b)
+    boneAdjs _ Nothing = forever (yield 0)
+    boneAdjs n (Just b) = animValues n b
 
-animValues :: Int -> B.ByteString -> [Int16]
-animValues numframes b = fromRight (error "animValues") (runGet (getValue numframes) b)
+showHex :: Int -> String
+showHex = printf "%04x"
+
+zipP :: (Traversable t, Monad m) => t (Producer a m r) -> Producer (t a) m r
+zipP ps = do
+  rs <- fmap sequence (traverse (lift . next) ps)
+  case rs of
+    Left r -> pure r
+    Right xs -> do
+      yield (fmap fst xs)
+      zipP (fmap snd xs)
+
+animValues :: Monad m => Int -> B.ByteString -> Producer Int16 m ()
+animValues numframes = runGetPipe (getValue numframes)
   where
-    getValue 0 = pure []
+    getValue 0 = pure ()
     getValue left = do
-      valid <- fromIntegral <$> getWord8
-      total <- fromIntegral <$> getWord8
-      traceM $ "valid: " <> show valid <> " total: " <> show total
-      values <- replicateM valid getInt16le
-      let vs = pad (total - valid) values
-      rest <- getValue (left - total)
-      pure $ vs ++ rest
+      valid <- fromIntegral <$> lift getWord8
+      total <- fromIntegral <$> lift getWord8
 
-    pad _ [] = []
-    pad n [x] = x : replicate n x
-    pad n (x : xs) = x : pad n xs
+      let go 0 l = replicateM_ (total - valid) (yield l)
+          go n _ = do
+            x <- lift getInt16le
+            yield x
+            go (n - 1) x
+
+      x <- lift getInt16le
+      yield x
+
+      go (valid - 1) x
+
+      getValue (left - total)
 
 skeletonConfig :: V.Vector Bone -> V.Vector SkelAdjustment -> V.Vector SkelTransform
 skeletonConfig bones adjs = tree
@@ -445,4 +467,4 @@ skeletonConfig bones adjs = tree
           pos = fmap fromIntegral posadj * _boneScalePos b + _boneDefaultPos b
        in (eulerToQuat rot, pos)
 
-    composeTransform (r2, p2) (r1, p1) = (r2 * r1, p2 + rotate r2 p1)
+    composeTransform (r2, p2) (r1, p1) = (r2 * r1, p1 + rotate r1 p2)

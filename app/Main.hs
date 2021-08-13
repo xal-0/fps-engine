@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PackageImports #-}
@@ -15,29 +16,30 @@ import qualified Data.Atlas as AT
 import Data.Bool (bool)
 import Data.Foldable
 import qualified Data.Vector as V
-import Data.Word
 import Graphics.GL.Core45 (glDisable)
 import Graphics.GL.Ext.ARB.FramebufferSRGB as G
 import Graphics.GPipe
 import qualified Graphics.GPipe.Context.GLFW as GLFW
-import Graphics.GPipe.Internal.Expr (normalize3)
 import Pipes as P
 import qualified Pipes.Prelude as P
 import Studio
+import Data.Int
 
 data State = State
   { _statePos :: V3 Float,
     _stateLook :: V2 Float, -- yaw, pitch
-    _statePrevMouse :: V2 Float
+    _statePrevMouse :: V2 Float,
+    _stateFrame :: Int32
   }
 
 makeLenses ''State
 
 data Env os = Env
   { _envViewport :: V2 Int,
-    _envMat :: Buffer os (Uniform (M44 (B Float))),
-    _envModelPrim :: PrimitiveArray Triangles (B3 Float, B3 Float, B2 Float),
-    _envModelTexture :: Texture2D os (Format RGBFloat)
+    _envUniform :: Buffer os (Uniform (M44 (B Float), B Int32)),
+    _envModelPrim :: PrimitiveArray Triangles (B3 Float, B3 Float, B2 Float, B Int32),
+    _envModelTexture :: Texture2D os (Format RGBFloat),
+    _envAnimTexture :: Texture2D os (Format RGBAFloat)
   }
 
 makeLenses ''Env
@@ -55,15 +57,23 @@ main =
     when G.gl_ARB_framebuffer_sRGB $
       glDisable G.GL_FRAMEBUFFER_SRGB
 
-    (modelBuf, modelTexture) <- loadMdl "models/halflife/v_mp5.mdl"
+    (modelBuf, modelTexture, skelTexture) <- loadMdl "models/halflife/v_ak47.mdl"
 
     shader <- compileShader do
       prim <- toPrimitiveStream _envModelPrim
-      mat <- getUniform ((,0) . _envMat)
+      (mat, frame) <- getUniform ((,0) . _envUniform)
 
-      let shadeVertex (vert, n, uv) = (vert', (n, uv))
+      samplerAnim <- newSampler2D \s ->
+        (s ^. envAnimTexture, SamplerNearest, (V2 ClampToEdge ClampToEdge, undefined))
+
+      let shadeVertex (vert, n, uv, b) = (vert', (n, uv))
             where
-              vert' = mat !* point vert
+              vert' = mat !* (point (rotate' skelquat vert + skelpos))
+              skelquatv = texelFetch2D samplerAnim Nothing 0 (V2 (2 * b) frame)
+              skelquat = Quaternion (skelquatv ^. _w) (skelquatv ^. _xyz)
+              skelposv = texelFetch2D samplerAnim Nothing 0 (V2 (2 * b + 1) frame)
+              skelpos = skelposv ^. _xyz
+
           rastSettings s = (FrontAndBack, PolygonFill, ViewPort (V2 0 0) (s ^. envViewport), DepthRange 0 1)
 
       frag <- rasterize rastSettings (fmap shadeVertex prim)
@@ -71,7 +81,7 @@ main =
       sampler <- newSampler2D \s ->
         (s ^. envModelTexture, SamplerNearest, (V2 ClampToEdge ClampToEdge, undefined))
       let shadeFrag (n, uv) info =
-            ( sample2D sampler SampleAuto Nothing Nothing uv ^* clamp 0 (dot n (normalize3 (V3 0 40 30)) + 0.9) 1,
+            ( sample2D sampler SampleAuto Nothing Nothing uv,
               rasterizedFragCoord info ^. _z
             )
           drawSettings _ =
@@ -82,7 +92,7 @@ main =
 
       drawWindowColorDepth drawSettings (withRasterizedInfo shadeFrag frag)
 
-    matBuf <- newBuffer 1
+    uniBuf <- newBuffer 1
 
     let sensitivity = 0.005
         vel = 0.5
@@ -106,21 +116,23 @@ main =
               lookm = lookAt pos' (pos' + forward) (- up)
               aspect = fromIntegral sizeX / fromIntegral sizeY
               perspect = perspective 80 aspect 1 1000
+              -- gunmat = mkTransformation (axisAngle (V3 0 0 1) (pi/2)) (V3 0 0 0) -- !*! m33_to_m44 (scaled (V3 (-1) 1 1))
 
-          writeBuffer matBuf 0 [perspect !*! mkTransformation (axisAngle (V3 1 0 0) (pi / 2)) (V3 (-4) 7 (-8)) !*! m33_to_m44 (scaled (V3 (-1) 1 1))]
+          writeBuffer uniBuf 0 [(perspect, (state ^. stateFrame `div` 3) `mod` 101)]
 
           render do
             clearWindowColor win (V3 0.25 0.25 0.25)
             clearWindowDepth win 1
             modelVerts <- newVertexArray modelBuf
             let modelPrim = toPrimitiveArray TriangleList modelVerts
-            shader (Env (V2 sizeX sizeY) matBuf modelPrim modelTexture)
+            shader (Env (V2 sizeX sizeY) uniBuf modelPrim modelTexture skelTexture)
 
           let state' =
                 state
                   & statePrevMouse .~ mouse'
                   & stateLook .~ look'
                   & statePos .~ pos'
+                  & stateFrame +~ 1
 
           swapWindowBuffers win
           closeRequested <- GLFW.windowShouldClose win
@@ -128,12 +140,31 @@ main =
             (closeRequested == Just True)
             (loop state')
 
-    loop (State (V3 0 0 20) (V2 0 0) 0)
+    loop (State (V3 0 0 20) (V2 0 0) 0 0)
+
+rotate' :: Conjugate a => Quaternion a -> V3 a -> V3 a
+rotate' q v = ijk where
+  Quaternion _ ijk = q $*$ Quaternion 0 v $*$ conjugate' q
+
+conjugate' :: Conjugate a => Quaternion a -> Quaternion a
+conjugate' (Quaternion e v) = Quaternion (conjugate e) (negate v)
+
+($*$) :: Num a => Quaternion a -> Quaternion a -> Quaternion a
+Quaternion s1 v1 $*$ Quaternion s2 v2 =
+  Quaternion (s1 * s2 - (v1 `dot` v2)) $
+    (v1 `cross` v2) + s1 *^ v2 + s2 *^ v1
 
 loadMdl ::
   ContextHandler ctx =>
   FilePath ->
-  ContextT ctx os IO (Buffer os (B3 Float, B3 Float, B2 Float), Texture2D os (Format RGBFloat))
+  ContextT
+    ctx
+    os
+    IO
+    ( Buffer os (B3 Float, B3 Float, B2 Float, B Int32),
+      Texture2D os (Format RGBFloat),
+      Texture2D os (Format RGBAFloat)
+    )
 loadMdl file = do
   liftIO $ putStrLn $ "loading model " <> file
   studio <- liftIO (readStudio file)
@@ -148,16 +179,9 @@ loadMdl file = do
     Right locs <- AT.pack atlas (view (textureSize . v2pt)) (\_ _ -> ()) const textures
     pure (fmap (review v2pt) locs)
 
-  -- let meshes' = concatMap (\m -> fmap (updateMesh (m ^. meshSkin)) (m ^.. meshTris)) meshes
-  --     updateMesh skin (Vertex v n uv _ _) =
-  --       ( v,
-  --         n,
-  --         fmap fromIntegral ((locs V.! skin) + fmap fromIntegral uv) / fromIntegral minsize
-  --       )
-
   let vertices = P.toList $ P.each meshes `for` updateMesh
       updateMesh m = m ^. meshTris >-> P.map (updateVertex m)
-      updateVertex m (Vertex v n uv _ _) = (v, n, fuv m uv)
+      updateVertex m (Vertex v n uv b _) = (v, n, fuv m uv, fromIntegral b)
       fuv m uv =
         fmap fromIntegral ((locs V.! (m ^. meshSkin)) + fmap fromIntegral uv)
           / fromIntegral minsize
@@ -167,9 +191,28 @@ loadMdl file = do
 
   texture <- newTexture2D RGB8 (V2 minsize minsize) 1
   forM_ (zip (toList textures) (toList locs)) \(t, pos) ->
-    writeTexture2D texture 0 pos (t ^. textureSize) (t ^.. texturePixels)
+    writeTexture2D texture 0 pos (t ^. textureSize) (t ^. texturePixels . to P.toList)
 
-  pure (modelVerts, texture)
+  let Just ss = studio ^? studioSeqs . ix 1
+      skelTextureP = (ss ^. seqAnim) `for` skelTextureRow
+
+      skelTextureSize = V2 (V.length (studio ^. studioBones) * 2) (ss ^. seqNumFrames)
+      skelTextureRow skelTransforms = P.each skelTransforms `for` skelTextureTr
+      skelTextureTr (rot, pos) = do
+        yield $ rot ^. _xyzw
+        yield $ vector pos
+
+  skelTexture <- newTexture2D RGBA32F skelTextureSize 1
+  writeTexture2D skelTexture 0 (V2 0 0) skelTextureSize (P.toList skelTextureP)
+
+  -- skelVertices <- newBuffer (V.length (studio ^. studioBones) * 2)
+
+
+  -- let Just firstConfig =  runIdentity (P.head (ss ^. seqAnim))
+  --     boneVertices = V.izipWith boneVertex (studio ^. studioBones) firstConfig
+  --     boneVertex n b (rot, pos) = undefined
+
+  pure (modelVerts, texture, skelTexture)
 
 v2pt :: Iso' (V2 Int) AT.Pt
 v2pt = iso (\(V2 x y) -> AT.Pt x y) (\(AT.Pt x y) -> V2 x y)
