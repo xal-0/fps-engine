@@ -212,16 +212,42 @@ typedef struct
 } mstudioseqdesc_t;
 
 // events
+/* Types:
+   https://the303.org/tutorials/gold_qc.htm
+Event	Event description	Extra parameters
+1000	Character dead at this point	
+1001	Sequence un-interruptible from this point	
+1002	Sequence interruptible from this point	
+1003	Fires a trigger in the map	Trigger name
+1004	Play .wav file	.Wav file path
+1005	Play sentence file	Sentence file path
+1006	Do not send character back to floor at end of script	
+1007	Go to this animation after script completes	Animation sequence name
+1008	Play named .wav file through voice channel	.Wav file path
+1009	Play random sentence group (25 % chance)	
+1010	Character is alive at this point	
+Monster specific events	
+2001	Monster drops light body	
+2002	Monster drops heavy body	
+2010	Monster plays swing or swish sound	
 
-/*
+Clientside events for viewmodels	
+5001	Muzzleflash on attachment 0	Muzzle flash scale & sprite type
+5002	Spark on attachment	
+5004	Emit a sound	Wav file path
+5011	Muzzleflash on attachment 1	Muzzle flash scale & sprite type
+5021	Muzzleflash on attachment 2	Muzzle flash scale & sprite type
+5031	Muzzleflash on attachment 3	Muzzle flash scale & sprite type
+6001	Eject a brass shell from attachment
+ */
 typedef struct 
 {
 	int 				frame;
 	int					event;
 	int					type;
+
 	char				options[64];
 } mstudioevent_t;
-*/
 
 // pivots
 typedef struct 

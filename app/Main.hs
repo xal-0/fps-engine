@@ -57,7 +57,7 @@ main =
     when G.gl_ARB_framebuffer_sRGB $
       glDisable G.GL_FRAMEBUFFER_SRGB
 
-    (modelBuf, modelTexture, skelTexture) <- loadMdl "models/halflife/v_ak47.mdl"
+    (modelBuf, modelTexture, skelTexture) <- loadMdl "models/halflife/v_mp5.mdl"
 
     shader <- compileShader do
       prim <- toPrimitiveStream _envModelPrim
@@ -68,7 +68,8 @@ main =
 
       let shadeVertex (vert, n, uv, b) = (vert', (n, uv))
             where
-              vert' = mat !* (point (rotate' skelquat vert + skelpos))
+              -- vert' = mat !* (point ((rotate' skelquat vert) + skelpos))
+              vert' = mat !* (mkTransformation skelquat skelpos !* point vert)
               skelquatv = texelFetch2D samplerAnim Nothing 0 (V2 (2 * b) frame)
               skelquat = Quaternion (skelquatv ^. _w) (skelquatv ^. _xyz)
               skelposv = texelFetch2D samplerAnim Nothing 0 (V2 (2 * b + 1) frame)
@@ -79,7 +80,7 @@ main =
       frag <- rasterize rastSettings (fmap shadeVertex prim)
 
       sampler <- newSampler2D \s ->
-        (s ^. envModelTexture, SamplerNearest, (V2 ClampToEdge ClampToEdge, undefined))
+        (s ^. envModelTexture, SamplerFilter Linear Linear Linear Nothing, (V2 ClampToEdge ClampToEdge, undefined))
       let shadeFrag (n, uv) info =
             ( sample2D sampler SampleAuto Nothing Nothing uv,
               rasterizedFragCoord info ^. _z
@@ -115,10 +116,10 @@ main =
                   + right * vel * (bool 0 1 dkey + bool 0 (-1) akey)
               lookm = lookAt pos' (pos' + forward) (- up)
               aspect = fromIntegral sizeX / fromIntegral sizeY
-              perspect = perspective 80 aspect 1 1000
-              -- gunmat = mkTransformation (axisAngle (V3 0 0 1) (pi/2)) (V3 0 0 0) -- !*! m33_to_m44 (scaled (V3 (-1) 1 1))
+              perspect = mkTransformation 0 (V3 0 0 0) !*! perspective (pi / 2 - 0.2) aspect 1 1000
+              gunmat = V4 (V4 0 1 0 0) (V4 0 0 1 0) (V4 (-1) 0 0 0) (V4 0 0 0 1)
 
-          writeBuffer uniBuf 0 [(perspect, (state ^. stateFrame `div` 3) `mod` 101)]
+          writeBuffer uniBuf 0 [(perspect !*! gunmat, (state ^. stateFrame `div` 2) `mod` 101)]
 
           render do
             clearWindowColor win (V3 0.25 0.25 0.25)
@@ -168,7 +169,7 @@ loadMdl ::
 loadMdl file = do
   liftIO $ putStrLn $ "loading model " <> file
   studio <- liftIO (readStudio file)
-  let Just meshes = studio ^? studioBodyparts . ix 2 . bodypartDefaultModel . modelMeshes
+  let meshes = studio ^. studioBodyparts . traverse . bodypartDefaultModel . modelMeshes
       Just textures = studio ^? studioTextures
 
       pixels = textures & sumOf (traverse . textureSize . to product)

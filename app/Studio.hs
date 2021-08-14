@@ -122,7 +122,8 @@ data Seq = Seq
   { _seqName :: T.Text,
     _seqFps :: Float,
     _seqNumFrames :: Int,
-    _seqAnim :: Producer (V.Vector SkelTransform) Identity ()
+    _seqAnim :: Producer (V.Vector SkelTransform) Identity (),
+    _seqEvents :: V.Vector (Int, Event)
   }
 
 data Keyframe a = Keyframe
@@ -131,12 +132,17 @@ data Keyframe a = Keyframe
   }
   deriving (Functor, Foldable, Traversable)
 
+data Event = EventSound FilePath
+           | EventMuzzleFlash
+  deriving Show
+
 makeLenses ''Studio
 makeLenses ''Texture
 makeLenses ''Bodypart
 makeLenses ''Model
 makeLenses ''Mesh
 makeLenses ''Seq
+makeLenses ''Event
 
 readStudio :: FilePath -> IO Studio
 readStudio file = do
@@ -267,7 +273,9 @@ readStudio file = do
         _seqFps <- getFloat32le
 
         skip 0xc
-        skip 0x8 -- events
+
+        _seqEvents <- seekGetVec getEvent
+
         _seqNumFrames <- fromIntegral <$> getWord32le
         skip 0x3c
 
@@ -303,6 +311,17 @@ readStudio file = do
         if off == 0
           then pure Nothing
           else pure . Just $ B.drop (fromIntegral $ base + fromIntegral off) bs
+
+      getEvent = do
+        frame <- fromIntegral <$> getWord32le
+        event <- getWord32le
+        skip 0x4 -- "type"
+        options <- getName 64
+        let ev = case event of
+              5001 -> EventMuzzleFlash
+              5004 -> EventSound (T.unpack options)
+              _ -> error "unknown event"
+        pure (frame, ev)
 
   studio <- either fail pure r
   pure (studio & studioTextures %~ (<> extraTextures))
@@ -467,4 +486,4 @@ skeletonConfig bones adjs = tree
           pos = fmap fromIntegral posadj * _boneScalePos b + _boneDefaultPos b
        in (eulerToQuat rot, pos)
 
-    composeTransform (r2, p2) (r1, p1) = (r2 * r1, p1 + rotate r1 p2)
+    composeTransform (r2, p2) (r1, p1) = (r1 * r2, p1 + rotate r1 p2)
