@@ -52,16 +52,16 @@ import qualified Data.Text.Encoding as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import Data.Word
-import Foreign (Storable (sizeOf), plusForeignPtr)
+import Foreign (Storable, plusForeignPtr)
 import Foreign.ForeignPtr (castForeignPtr)
 import Linear hiding (trace)
 import Pipes as P
-import Pipes.Lift
 import qualified Pipes.Prelude as P
 import System.Directory
 import System.FilePath.Lens
 import System.IO.MMap
 import Util.Pipes
+import Util.SGet
 
 data Studio = Studio
   { _studioName :: T.Text,
@@ -151,26 +151,6 @@ readStudio file = do
       then _studioTextures <$> readStudio fileT
       else pure mempty
 
-  let seekGetVec g = do
-        num <- getInt32le
-        off <- getInt32le
-        seekGetVec' g num off
-
-      seekGetVec' g num off =
-        let g' = do
-              skip (fromIntegral off)
-              V.replicateM (fromIntegral num) g
-         in either fail pure (runGet g' bs)
-
-      seekGetVecS :: forall a n. (Storable a, Integral n) => n -> n -> VS.Vector a
-      seekGetVecS num off =
-        byteStringToVector
-          ( B.take
-              (fromIntegral num * sizeOf (undefined :: a))
-              (B.drop (fromIntegral off) bs)
-          )
-          (fromIntegral num)
-
   let r = flip runGet bs do
         magic <- getBytes 4
         version <- getInt32le
@@ -178,15 +158,15 @@ readStudio file = do
         _studioName <- getName 0x40
 
         skip 0x44
-        _studioBones <- seekGetVec getBone
+        _studioBones <- seekGetVec bs getBone
 
         skip 0x10
-        _studioSeqs <- seekGetVec (getSeq (V.length _studioBones))
+        _studioSeqs <- seekGetVec bs (getSeq (fromIntegral (V.length _studioBones)))
         skip 0x8
 
-        _studioTextures <- seekGetVec getTexture
+        _studioTextures <- seekGetVec bs getTexture
         skip 0x10
-        _studioBodyparts <- seekGetVec getBodypart
+        _studioBodyparts <- seekGetVec bs getBodypart
         pure (Studio {..})
 
       getTexture = do
@@ -195,8 +175,8 @@ readStudio file = do
         height <- getInt32le
         off <- getInt32le
         let _textureSize = V2 (fromIntegral width) (fromIntegral height)
-            texturePalette :: VS.Vector (V3 Word8) = seekGetVecS 0x100 (off + width * height)
-            textureIndices :: VS.Vector Word8 = seekGetVecS (width * height) off
+            texturePalette :: VS.Vector (V3 Word8) = seekGetVecS bs 0x100 (off + width * height)
+            textureIndices :: VS.Vector Word8 = seekGetVecS bs (width * height) off
             _texturePixels =
               P.each (VS.toList textureIndices)
                 >-> P.map ((texturePalette VS.!) . fromIntegral)
@@ -209,7 +189,7 @@ readStudio file = do
         num <- getInt32le
         _bodypartDefault <- fromIntegral <$> getInt32le
         off <- getInt32le
-        _bodypartModels <- seekGetVec' getModel num off
+        _bodypartModels <- seekGetVec' bs getModel num off
         pure (Bodypart {..})
 
       getModel = do
@@ -220,20 +200,21 @@ readStudio file = do
         vertinfoindex <- getInt32le
         vertindex <- getInt32le
 
-        let verts = seekGetVecS numverts vertindex
-            vertInfo = seekGetVecS numverts vertinfoindex
+        let verts = seekGetVecS bs numverts vertindex
+            vertInfo = seekGetVecS bs numverts vertinfoindex
 
         numnorms <- getInt32le
         norminfoindex <- getInt32le
         normindex <- getInt32le
 
-        let norms = seekGetVecS numnorms normindex
-            normInfo = seekGetVecS numnorms norminfoindex
+        let norms = seekGetVecS bs numnorms normindex
+            normInfo = seekGetVecS bs numnorms norminfoindex
 
         skip 0x8
 
         _modelMeshes <-
           seekGetVec'
+            bs
             (getMesh verts vertInfo norms normInfo)
             nummesh
             meshindex
@@ -270,7 +251,7 @@ readStudio file = do
 
         skip 0xc
 
-        _seqEvents <- seekGetVec getEvent
+        _seqEvents <- seekGetVec bs getEvent
 
         _seqNumFrames <- fromIntegral <$> getWord32le
         skip 0x3c
@@ -279,7 +260,7 @@ readStudio file = do
         guard $ numblends == 1
 
         animindex <- getWord32le
-        keyframeData <- seekGetVec' getKeyframes numbones animindex
+        keyframeData <- seekGetVec' bs getKeyframes numbones animindex
         let _seqAdjs = pSeqAdjs _seqNumFrames keyframeData
 
         skip 0x30
@@ -329,7 +310,7 @@ pSeqAdjs numframes keyframes = zipP (fmap pKeyframe keyframes)
 
     prod Nothing = forever (yield 0)
     prod (Just b) = pAdjs numframes b
-  
+
 pAdjs :: Monad m => Int -> B.ByteString -> Producer Int16 m ()
 pAdjs numframes = runGetPipe (getValue numframes)
   where
@@ -356,15 +337,6 @@ getV3 = V3 <$> getFloat32le <*> getFloat32le <*> getFloat32le
 
 getName :: Int -> Get T.Text
 getName len = T.decodeUtf8 . B.takeWhile (/= 0) <$> getBytes len
-
-runGetPipe :: Monad m => Proxy a' a b' b Get r -> B.ByteString -> Proxy a' a b' b m r
-runGetPipe p = evalStateT (distribute (hoist f p))
-  where
-    f g = do
-      s <- get
-      let Right (x, s') = runGetState g s 0
-      put s'
-      pure x
 
 bodypartDefaultModel :: Traversal' Bodypart Model
 bodypartDefaultModel f b = (bodypartModels . ix (_bodypartDefault b - 1)) f b

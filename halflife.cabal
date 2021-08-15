@@ -27,3 +27,4 @@ executable halflife
     other-modules:    Engine.File.Studio
                     , Engine.File.Bsp
                     , Util.Pipes
+                    , Util.SGet
