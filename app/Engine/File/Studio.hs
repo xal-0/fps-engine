@@ -143,157 +143,172 @@ readStudio file = do
       then _studioTextures <$> readStudio fileT
       else pure mempty
 
-  let r = flip runGet bs do
-        magic <- getBytes 4
-        version <- getInt32le
-        guard $ magic == "IDST" && version == 10
-        _studioName <- getName 0x40
-
-        skip 0x44
-        _studioBones <- seekGetVec bs getBone
-
-        skip 0x10
-        _studioSeqs <- seekGetVec bs (getSeq (fromIntegral (V.length _studioBones)))
-        skip 0x8
-
-        _studioTextures <- seekGetVec bs getTexture
-        skip 0x10
-        _studioBodyparts <- seekGetVec bs getBodypart
-        pure (Studio {..})
-
-      getTexture = do
-        skip 0x44
-        width <- getInt32le
-        height <- getInt32le
-        off <- getInt32le
-        let _textureSize = V2 (fromIntegral width) (fromIntegral height)
-            texturePalette :: VS.Vector (V3 Word8) = seekGetVecS bs 0x100 (off + width * height)
-            textureIndices :: VS.Vector Word8 = seekGetVecS bs (width * height) off
-            _texturePixels =
-              P.each (VS.toList textureIndices)
-                >-> P.map ((texturePalette VS.!) . fromIntegral)
-
-        pure (Texture {..})
-
-      getBodypart = do
-        -- Of course, this one array does not use the usual layout.
-        skip 0x40
-        num <- getInt32le
-        _bodypartDefault <- fromIntegral <$> getInt32le
-        off <- getInt32le
-        _bodypartModels <- seekGetVec' bs getModel num off
-        pure (Bodypart {..})
-
-      getModel = do
-        skip 0x48
-        nummesh <- getInt32le
-        meshindex <- getInt32le
-        numverts <- getInt32le
-        vertinfoindex <- getInt32le
-        vertindex <- getInt32le
-
-        let verts = seekGetVecS bs numverts vertindex
-            vertInfo = seekGetVecS bs numverts vertinfoindex
-
-        numnorms <- getInt32le
-        norminfoindex <- getInt32le
-        normindex <- getInt32le
-
-        let norms = seekGetVecS bs numnorms normindex
-            normInfo = seekGetVecS bs numnorms norminfoindex
-
-        skip 0x8
-
-        _modelMeshes <-
-          seekGetVec'
-            bs
-            (getMesh verts vertInfo norms normInfo)
-            nummesh
-            meshindex
-
-        pure (Model {..})
-
-      getMesh verts vertInfo norms normInfo = do
-        _meshNumTris <- fromIntegral <$> getInt32le
-        triindex <- getInt32le
-        _meshSkin <- fromIntegral <$> getInt32le
-        skip 0x8
-
-        let meshData = B.drop (fromIntegral triindex) bs
-            _meshTris =
-              runGetPipe
-                (getTris verts vertInfo norms normInfo)
-                meshData
-
-        pure (Mesh {..})
-
-      getBone = do
-        _boneName <- getName 32
-        _boneParent <- fromIntegral <$> getInt32le
-        skip 0x1c
-        _boneDefaultPos <- getV3
-        _boneDefaultRot <- getV3
-        _boneScalePos <- getV3
-        _boneScaleRot <- getV3
-        pure (Bone {..})
-
-      getSeq numbones = do
-        _seqName <- getName 32
-        _seqFps <- getFloat32le
-
-        skip 0xc
-
-        _seqEvents <- seekGetVec bs getEvent
-
-        _seqNumFrames <- fromIntegral <$> getWord32le
-        skip 0x3c
-
-        numblends <- getWord32le
-        guard $ numblends == 1
-
-        animindex <- getWord32le
-        keyframeData <- seekGetVec' bs getKeyframes numbones animindex
-        let _seqAdjs = pSeqAdjs _seqNumFrames keyframeData
-
-        skip 0x30
-
-        pure (Seq {..})
-
-      getKeyframes = do
-        base <- bytesRead
-
-        xs <- getAnimData base
-        ys <- getAnimData base
-        zs <- getAnimData base
-
-        xrs <- getAnimData base
-        yrs <- getAnimData base
-        zrs <- getAnimData base
-
-        let _keyframePosData = V3 xs ys zs
-            _keyframeRotData = V3 xrs yrs zrs
-
-        pure (Keyframe {..})
-
-      getAnimData base = do
-        off <- getWord16le
-        if off == 0
-          then pure Nothing
-          else pure . Just $ B.drop (fromIntegral $ base + fromIntegral off) bs
-
-      getEvent = do
-        frame <- fromIntegral <$> getWord32le
-        event <- getWord32le
-        skip 0x4 -- "type"
-        options <- getName 64
-        let ev = case event of
-              5001 -> EventMuzzleFlash
-              5004 -> EventSound (T.unpack options)
-              _ -> error "unknown event"
-        pure (frame, ev)
-
-  studio <- either fail pure r
+  studio <- either fail pure (runGet (getStudio bs) bs)
   pure (studio & studioTextures %~ (<> extraTextures))
+
+getStudio :: B.ByteString -> Get Studio
+getStudio bs = do
+  magic <- getBytes 4
+  version <- getInt32le
+  guard $ magic == "IDST" && version == 10
+  _studioName <- getName 0x40
+
+  skip 0x44
+  _studioBones <- seekGetVec bs getBone
+
+  skip 0x10
+  _studioSeqs <- seekGetVec bs (getSeq bs (fromIntegral (V.length _studioBones)))
+  skip 0x8
+
+  _studioTextures <- seekGetVec bs (getTexture bs)
+  skip 0x10
+  _studioBodyparts <- seekGetVec bs (getBodypart bs)
+  pure (Studio {..})
+
+getTexture :: B.ByteString -> Get Texture
+getTexture bs = do
+  skip 0x44
+  width <- getInt32le
+  height <- getInt32le
+  off <- getInt32le
+  let _textureSize = V2 (fromIntegral width) (fromIntegral height)
+      texturePalette :: VS.Vector (V3 Word8) = seekGetVecS bs 0x100 (off + width * height)
+      textureIndices :: VS.Vector Word8 = seekGetVecS bs (width * height) off
+      _texturePixels =
+        P.each (VS.toList textureIndices)
+          >-> P.map ((texturePalette VS.!) . fromIntegral)
+
+  pure (Texture {..})
+
+getBodypart :: B.ByteString -> Get Bodypart
+getBodypart bs = do
+  -- Of course, this one array does not use the usual layout.
+  skip 0x40
+  num <- getInt32le
+  _bodypartDefault <- fromIntegral <$> getInt32le
+  off <- getInt32le
+  _bodypartModels <- seekGetVec' bs (getModel bs) num off
+  pure (Bodypart {..})
+
+getModel :: B.ByteString -> Get Model
+getModel bs = do
+  skip 0x48
+  nummesh <- getInt32le
+  meshindex <- getInt32le
+  numverts <- getInt32le
+  vertinfoindex <- getInt32le
+  vertindex <- getInt32le
+
+  let verts = seekGetVecS bs numverts vertindex
+      vertInfo = seekGetVecS bs numverts vertinfoindex
+
+  numnorms <- getInt32le
+  norminfoindex <- getInt32le
+  normindex <- getInt32le
+
+  let norms = seekGetVecS bs numnorms normindex
+      normInfo = seekGetVecS bs numnorms norminfoindex
+
+  skip 0x8
+
+  _modelMeshes <-
+    seekGetVec'
+      bs
+      (getMesh bs verts vertInfo norms normInfo)
+      nummesh
+      meshindex
+
+  pure (Model {..})
+
+getMesh ::
+  B.ByteString ->
+  VS.Vector (V3 Float) ->
+  VS.Vector Word8 ->
+  VS.Vector (V3 Float) ->
+  VS.Vector Word8 ->
+  Get Mesh
+getMesh bs verts vertInfo norms normInfo = do
+  _meshNumTris <- fromIntegral <$> getInt32le
+  triindex <- getInt32le
+  _meshSkin <- fromIntegral <$> getInt32le
+  skip 0x8
+
+  let meshData = B.drop (fromIntegral triindex) bs
+      _meshTris =
+        runGetPipe
+          (getTris verts vertInfo norms normInfo)
+          meshData
+
+  pure (Mesh {..})
+
+getBone :: Get Bone
+getBone = do
+  _boneName <- getName 32
+  _boneParent <- fromIntegral <$> getInt32le
+  skip 0x1c
+  _boneDefaultPos <- getV3
+  _boneDefaultRot <- getV3
+  _boneScalePos <- getV3
+  _boneScaleRot <- getV3
+  pure (Bone {..})
+
+getSeq :: B.ByteString -> Word32 -> Get Seq
+getSeq bs numbones = do
+  _seqName <- getName 32
+  _seqFps <- getFloat32le
+
+  skip 0xc
+
+  _seqEvents <- seekGetVec bs getEvent
+
+  _seqNumFrames <- fromIntegral <$> getWord32le
+  skip 0x3c
+
+  numblends <- getWord32le
+  guard $ numblends == 1
+
+  animindex <- getWord32le
+  keyframeData <- seekGetVec' bs (getKeyframes bs) numbones animindex
+  let _seqAdjs = pSeqAdjs _seqNumFrames keyframeData
+
+  skip 0x30
+
+  pure (Seq {..})
+
+getKeyframes :: B.ByteString -> Get (Keyframe (Maybe B.ByteString))
+getKeyframes bs = do
+  base <- bytesRead
+
+  xs <- getAnimData base
+  ys <- getAnimData base
+  zs <- getAnimData base
+
+  xrs <- getAnimData base
+  yrs <- getAnimData base
+  zrs <- getAnimData base
+
+  let _keyframePosData = V3 xs ys zs
+      _keyframeRotData = V3 xrs yrs zrs
+
+  pure (Keyframe {..})
+  where
+    getAnimData base = do
+      off <- getWord16le
+      if off == 0
+        then pure Nothing
+        else pure . Just $ B.drop (fromIntegral $ base + fromIntegral off) bs
+
+getEvent :: Get (Int, Event)
+getEvent = do
+  frame <- fromIntegral <$> getWord32le
+  event <- getWord32le
+  skip 0x4 -- "type"
+  options <- getName 64
+  let ev = case event of
+        5001 -> EventMuzzleFlash
+        5004 -> EventSound (T.unpack options)
+        _ -> error "unknown event"
+  pure (frame, ev)
 
 pSeqAdjs :: Monad m => Int -> V.Vector (Keyframe (Maybe B.ByteString)) -> Producer SkelAdjustment m ()
 pSeqAdjs numframes keyframes = zipP (fmap pKeyframe keyframes)
