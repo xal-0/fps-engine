@@ -5,6 +5,11 @@ version:            0.1.0.0
 executable halflife
     main-is:          Main.hs
     ghc-options:      -Wall -fdefer-typed-holes -threaded
+    default-extensions: BlockArguments
+                      , FlexibleContexts
+                      , OverloadedStrings
+                      , RecordWildCards
+                      , ScopedTypeVariables
     build-depends:    GPipe-Core
                     , GPipe-GLFW4
                     , JuicyPixels
@@ -22,6 +27,8 @@ executable halflife
                     , text
                     , vector
                     , pipes
+                    , recursion-schemes
+                    , data-fix
     hs-source-dirs:   app
     default-language: Haskell2010
     other-modules:    Engine.File.Studio

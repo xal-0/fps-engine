@@ -1,11 +1,5 @@
-{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE DeriveTraversable #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
 module Engine.File.Studio
   ( readStudio,
@@ -34,6 +28,7 @@ module Engine.File.Studio
     seqFps,
     seqNumFrames,
     seqAdjs,
+    seqEvents,
     SkelAdjustment,
   )
 where
@@ -43,7 +38,6 @@ import Control.Lens
 import Control.Monad
 import Control.Monad.State
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Internal as B
 import Data.Int
 import Data.Serialize.Get
 import Data.Serialize.IEEE754
@@ -52,8 +46,6 @@ import qualified Data.Text.Encoding as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import Data.Word
-import Foreign (Storable, plusForeignPtr)
-import Foreign.ForeignPtr (castForeignPtr)
 import Linear hiding (trace)
 import Pipes as P
 import qualified Pipes.Prelude as P
@@ -332,9 +324,6 @@ pAdjs numframes = runGetPipe (getValue numframes)
 
       getValue (left - total)
 
-getV3 :: Get (V3 Float)
-getV3 = V3 <$> getFloat32le <*> getFloat32le <*> getFloat32le
-
 getName :: Int -> Get T.Text
 getName len = T.decodeUtf8 . B.takeWhile (/= 0) <$> getBytes len
 
@@ -399,9 +388,3 @@ fan = do
 
   v1 <- await
   go v1
-
-byteStringToVector :: forall a. (Storable a) => B.ByteString -> Int -> VS.Vector a
-byteStringToVector bs len = vec
-  where
-    vec = VS.unsafeFromForeignPtr0 (castForeignPtr (plusForeignPtr fptr off)) len
-    (fptr, off, _) = B.toForeignPtr bs
