@@ -35,3 +35,5 @@ executable halflife
                     , Engine.File.Bsp
                     , Util.Pipes
                     , Util.SGet
+                    , Util.Geometry
+                    , Engine.Render.Bsp
