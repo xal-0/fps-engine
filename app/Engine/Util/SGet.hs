@@ -1,5 +1,6 @@
-module Util.SGet
+module Engine.Util.SGet
   ( getV3,
+    getName,
     seekGetVec,
     seekGetVec',
     seekGetVecS,
@@ -14,6 +15,8 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as B
 import Data.Serialize.Get
 import Data.Serialize.IEEE754
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import Foreign.ForeignPtr
@@ -59,6 +62,9 @@ seekGetVecS bs num off =
 
 getV3 :: Get (V3 Float)
 getV3 = V3 <$> getFloat32le <*> getFloat32le <*> getFloat32le
+
+getName :: Int -> Get T.Text
+getName len = T.decodeUtf8 . B.takeWhile (/= 0) <$> getBytes len
 
 byteStringToVector :: Storable a => B.ByteString -> Int -> VS.Vector a
 byteStringToVector bs len = vec

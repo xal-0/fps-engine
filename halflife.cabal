@@ -33,7 +33,8 @@ executable halflife
     default-language: Haskell2010
     other-modules:    Engine.File.Studio
                     , Engine.File.Bsp
-                    , Util.Pipes
-                    , Util.SGet
-                    , Util.Geometry
+                    , Engine.File.Texture
+                    , Engine.Util.Pipes
+                    , Engine.Util.SGet
+                    , Engine.Util.Geometry
                     , Engine.Render.Bsp

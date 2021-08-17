@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 
-module Util.Pipes (zipP, runGetPipe) where
+module Engine.Util.Pipes (zipP, runGetPipe) where
 
 import Control.Monad.State
 import qualified Data.ByteString as B

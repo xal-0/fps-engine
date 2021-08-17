@@ -4,6 +4,7 @@
 module Engine.File.Bsp
   ( Bsp,
     bspTree,
+    bspTextures,
     BspTree,
     BspTreeF (..),
     nodePlane,
@@ -12,8 +13,8 @@ module Engine.File.Bsp
     leafFaces,
     _Node,
     _Leaf,
-    Face(..),
-    Plane(..),
+    Face (..),
+    Plane (..),
     readBsp,
   )
 where
@@ -27,12 +28,15 @@ import Data.Functor.Foldable
 import Data.Int
 import Data.Serialize.Get
 import Data.Serialize.IEEE754
+import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import Data.Word
+import Debug.Trace (traceShowM)
+import Engine.File.Texture
+import Engine.Util.SGet
 import Linear (V2 (..), V3 (..), _yx)
 import System.IO.MMap
-import Util.SGet
 
 data Plane = Plane {_planeNorm :: V3 Float, _planeDist :: Float}
   deriving (Show)
@@ -51,14 +55,16 @@ data BspTreeF a
   | Leaf {_leafFaces :: V.Vector Face}
   deriving (Show, Functor, Foldable, Traversable)
 
-makeLenses ''BspTreeF
-makePrisms ''BspTreeF
-
 type BspTree = Fix BspTreeF
 
-newtype Bsp = Bsp {_bspTree :: BspTree}
+data Bsp = Bsp
+  { _bspTree :: BspTree,
+    _bspTextures :: V.Vector (Either T.Text Texture)
+  }
 
 makeLenses ''Bsp
+makeLenses ''BspTreeF
+makePrisms ''BspTreeF
 
 readBsp :: FilePath -> IO Bsp
 readBsp file = do
@@ -87,6 +93,8 @@ getBsp bs = do
   skip 0x8 -- models
   let vertices :: VS.Vector (V3 Float) = readLumpS verticesL 0xc
   planes <- readLumpV planesL 0x14 getPlane
+
+  _bspTextures <- either fail pure (runGet (getTextures texturesL) texturesL)
 
   let edgeix :: VS.Vector (V2 Word16) = readLumpS edgesL 0x4
       edges = VS.map (fmap ((vertices VS.!) . fromIntegral)) edgeix
@@ -154,6 +162,26 @@ getFace edges planes = do
   let _faceEdges = VS.slice iedge nedge edges
       _facePlane = planes V.! iplane
   pure Face {..}
+
+getTextures :: B.ByteString -> Get (V.Vector (Either T.Text Texture))
+getTextures bs = do
+  ntextures <- fromIntegral <$> getWord32le
+  offs <- V.replicateM ntextures (fromIntegral <$> getWord32le)
+  traverse skipGetTexture offs
+  where
+    skipGetTexture off =
+      let bs' = B.drop off bs
+       in either fail pure (runGet (getTexture bs') bs')
+
+getTexture :: B.ByteString -> Get (Either T.Text Texture)
+getTexture bs = do
+  name <- getName 0x10
+  width <- fromIntegral <$> getWord32le
+  height <- fromIntegral <$> getWord32le
+  mip0 <- fromIntegral <$> getWord32le
+  if mip0 == 0
+    then pure (Left name)
+    else pure (Right (readTexture bs name (V2 width height) mip0))
 
 tieBspTree :: V.Vector (BspTreeF Int16) -> V.Vector (BspTreeF Int16) -> BspTree
 tieBspTree leaves nodes = ana coalg 0

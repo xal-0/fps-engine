@@ -1,20 +1,5 @@
 module Engine.Anim () where
 
-eulerToQuat :: V3 Float -> Quaternion Float
-eulerToQuat (V3 roll pitch yaw) = Quaternion qw (V3 qx qy qz)
-  where
-    cy = cos (yaw * 0.5)
-    sy = sin (yaw * 0.5)
-    cp = cos (pitch * 0.5)
-    sp = sin (pitch * 0.5)
-    cr = cos (roll * 0.5)
-    sr = sin (roll * 0.5)
-
-    qw = cr * cp * cy + sr * sp * sy
-    qx = sr * cp * cy - cr * sp * sy
-    qy = cr * sp * cy + sr * cp * sy
-    qz = cr * cp * sy - sr * sp * cy
-
 pSeqAnim ::
   Monad m =>
   V.Vector Bone ->

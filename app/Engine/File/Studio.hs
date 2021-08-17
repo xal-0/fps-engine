@@ -9,9 +9,6 @@ module Engine.File.Studio
     studioTextures,
     studioBones,
     studioSeqs,
-    Texture,
-    textureSize,
-    texturePixels,
     Bodypart,
     bodypartModels,
     bodypartDefault,
@@ -42,19 +39,18 @@ import Data.Int
 import Data.Serialize.Get
 import Data.Serialize.IEEE754
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import Data.Word
+import Engine.File.Texture
+import Engine.Util.Geometry
+import Engine.Util.Pipes
+import Engine.Util.SGet
 import Linear hiding (trace)
 import Pipes as P
-import qualified Pipes.Prelude as P
 import System.Directory
 import System.FilePath.Lens
 import System.IO.MMap
-import Util.Geometry
-import Util.Pipes
-import Util.SGet
 
 data Studio = Studio
   { _studioName :: T.Text,
@@ -63,11 +59,6 @@ data Studio = Studio
     _studioTextures :: V.Vector Texture,
     _studioBones :: V.Vector Bone,
     _studioSeqs :: V.Vector Seq
-  }
-
-data Texture = Texture
-  { _textureSize :: V2 Int,
-    _texturePixels :: Producer (V3 Word8) Identity ()
   }
 
 data Bodypart = Bodypart
@@ -126,7 +117,6 @@ data Event
   deriving (Show)
 
 makeLenses ''Studio
-makeLenses ''Texture
 makeLenses ''Bodypart
 makeLenses ''Model
 makeLenses ''Mesh
@@ -168,18 +158,12 @@ getStudio bs = do
 
 getTexture :: B.ByteString -> Get Texture
 getTexture bs = do
-  skip 0x44
-  width <- getInt32le
-  height <- getInt32le
-  off <- getInt32le
-  let _textureSize = V2 (fromIntegral width) (fromIntegral height)
-      texturePalette :: VS.Vector (V3 Word8) = seekGetVecS bs 0x100 (off + width * height)
-      textureIndices :: VS.Vector Word8 = seekGetVecS bs (width * height) off
-      _texturePixels =
-        P.each (VS.toList textureIndices)
-          >-> P.map ((texturePalette VS.!) . fromIntegral)
-
-  pure (Texture {..})
+  name <- getName 0x40
+  skip 0x4
+  width <- fromIntegral <$> getInt32le
+  height <- fromIntegral <$> getInt32le
+  off <- fromIntegral <$> getInt32le
+  pure (readTexture bs name (V2 width height) off)
 
 getBodypart :: B.ByteString -> Get Bodypart
 getBodypart bs = do
@@ -339,9 +323,6 @@ pAdjs numframes = runGetPipe (getValue numframes)
       go (valid - 1) x
 
       getValue (left - total)
-
-getName :: Int -> Get T.Text
-getName len = T.decodeUtf8 . B.takeWhile (/= 0) <$> getBytes len
 
 bodypartDefaultModel :: Traversal' Bodypart Model
 bodypartDefaultModel f b = (bodypartModels . ix (_bodypartDefault b - 1)) f b
