@@ -4,12 +4,18 @@ version:            0.1.0.0
 
 executable halflife
     main-is:          Main.hs
-    ghc-options:      -Wall -fdefer-typed-holes -threaded
+    ghc-options:      -threaded
+                      -Wall
+                      -Wno-partial-type-signatures
+                      -Wno-missing-signatures
+                      -fdefer-typed-holes
     default-extensions: BlockArguments
                       , FlexibleContexts
                       , OverloadedStrings
                       , RecordWildCards
                       , ScopedTypeVariables
+                      , Arrows
+                      , PartialTypeSignatures
     build-depends:    GPipe-Core
                     , GPipe-GLFW4
                     , JuicyPixels
@@ -17,6 +23,7 @@ executable halflife
                     , base ^>=4.14.1.0
                     , bytestring
                     , cereal
+                    , data-fix
                     , directory
                     , ghc-heap-view
                     , gl
@@ -24,11 +31,12 @@ executable halflife
                     , linear
                     , mmap
                     , mtl
-                    , text
-                    , vector
+                    , netwire
                     , pipes
                     , recursion-schemes
-                    , data-fix
+                    , text
+                    , time
+                    , vector
     hs-source-dirs:   app
     default-language: Haskell2010
     other-modules:    Engine.File.Studio
@@ -38,3 +46,6 @@ executable halflife
                     , Engine.Util.SGet
                     , Engine.Util.Geometry
                     , Engine.Render.Bsp
+                    , Engine.Player
+                    , Engine.Logic
+                    , Engine.World
