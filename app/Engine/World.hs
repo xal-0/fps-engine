@@ -1,3 +1,5 @@
 module Engine.World where
 
-type World = Float
+import Linear.V2
+
+type World = V2 Float

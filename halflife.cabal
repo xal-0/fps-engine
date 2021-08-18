@@ -16,6 +16,7 @@ executable halflife
                       , ScopedTypeVariables
                       , Arrows
                       , PartialTypeSignatures
+                      , TupleSections
     build-depends:    GPipe-Core
                     , GPipe-GLFW4
                     , JuicyPixels
@@ -42,10 +43,12 @@ executable halflife
     other-modules:    Engine.File.Studio
                     , Engine.File.Bsp
                     , Engine.File.Texture
+                    , Engine.File.Wad
                     , Engine.Util.Pipes
                     , Engine.Util.SGet
                     , Engine.Util.Geometry
                     , Engine.Render.Bsp
+                    , Engine.Render.Texture
                     , Engine.Player
                     , Engine.Logic
                     , Engine.World
