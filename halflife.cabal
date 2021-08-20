@@ -17,13 +17,16 @@ executable halflife
                       , Arrows
                       , PartialTypeSignatures
                       , TupleSections
+                      , NamedFieldPuns
     build-depends:    GPipe-Core
                     , GPipe-GLFW4
                     , JuicyPixels
                     , atlas
                     , base ^>=4.14.1.0
+                    , bitvec
                     , bytestring
                     , cereal
+                    , data-default
                     , data-fix
                     , directory
                     , ghc-heap-view
@@ -52,3 +55,4 @@ executable halflife
                     , Engine.Player
                     , Engine.Logic
                     , Engine.World
+                    , Engine.BspTree

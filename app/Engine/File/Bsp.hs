@@ -1,29 +1,31 @@
-{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Engine.File.Bsp
-  ( Bsp,
+  ( readBsp,
+    Bsp,
     bspTree,
     bspTextures,
+    bspLeaves,
     BspTree,
     BspTreeF (..),
-    nodePlane,
-    nodeFront,
-    nodeBack,
+    LeafData,
     leafFaces,
-    _Node,
-    _Leaf,
+    leafVis,
     Face (..),
-    Plane (..),
-    readBsp,
+    TexInfo,
+    texinfoS,
+    texinfoT,
+    texinfoSD,
+    texinfoTD,
+    texinfoTexture,
   )
 where
 
 import Control.Lens
 import Control.Monad
 import Data.Bits (complement)
+import Data.Bits.Lens
 import qualified Data.ByteString as B
-import Data.Fix (Fix (..))
 import Data.Functor.Foldable
 import Data.Int
 import Data.Serialize.Get
@@ -32,39 +34,48 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import Data.Word
-import Debug.Trace (traceShowM)
+import Engine.BspTree
 import Engine.File.Texture
 import Engine.Util.SGet
 import Linear (V2 (..), V3 (..), _yx)
+import Pipes
+import qualified Pipes.Prelude as P
 import System.IO.MMap
 
-data Plane = Plane {_planeNorm :: V3 Float, _planeDist :: Float}
-  deriving (Show)
-
 data Face = Face
-  { _facePlane :: Plane,
-    _faceSide :: Bool,
-    _faceEdges :: VS.Vector Edge
+  { _facePlane :: !Plane,
+    _faceSide :: !Bool,
+    _faceEdges :: !(VS.Vector Edge),
+    _faceTexInfo :: !TexInfo
   }
   deriving (Show)
 
 type Edge = V2 (V3 Float)
 
-data BspTreeF a
-  = Node {_nodePlane :: Plane, _nodeFront :: a, _nodeBack :: a}
-  | Leaf {_leafFaces :: V.Vector Face}
-  deriving (Show, Functor, Foldable, Traversable)
+data LeafData = LeafData
+  { _leafFaces :: V.Vector Face,
+    _leafVis :: V.Vector Int
+  }
+  deriving (Show)
 
-type BspTree = Fix BspTreeF
+data TexInfo = TexInfo
+  { _texinfoS :: !(V3 Float),
+    _texinfoT :: !(V3 Float),
+    _texinfoSD :: !Float,
+    _texinfoTD :: !Float,
+    _texinfoTexture :: !Int
+  }
+  deriving (Show)
 
 data Bsp = Bsp
-  { _bspTree :: BspTree,
+  { _bspTree :: BspTree Int,
+    _bspLeaves :: V.Vector LeafData,
     _bspTextures :: V.Vector (Either T.Text Texture)
   }
 
 makeLenses ''Bsp
-makeLenses ''BspTreeF
-makePrisms ''BspTreeF
+makeLenses ''LeafData
+makeLenses ''TexInfo
 
 readBsp :: FilePath -> IO Bsp
 readBsp file = do
@@ -76,13 +87,13 @@ getBsp bs = do
   version <- getWord32le
   guard $ version == 30
 
-  skip 0x8 -- entities
+  entitiesL <- getLump bs
   planesL <- getLump bs
   texturesL <- getLump bs
   verticesL <- getLump bs
-  skip 0x8 -- visibility
+  visL <- getLump bs
   nodesL <- getLump bs
-  skip 0x8 -- texinfo
+  texinfoL <- getLump bs
   facesL <- getLump bs
   skip 0x8 -- lighting
   skip 0x8 -- clipnodes
@@ -105,15 +116,20 @@ getBsp bs = do
       surfedgesix :: VS.Vector Int32 = readLumpS surfedgesL 0x4
       surfedges = VS.map (lookupSurfedge edges) surfedgesix
 
-  faces <- readLumpV facesL 0x14 (getFace surfedges planes)
+  texinfos <- readLumpV texinfoL 0x28 getTexInfo
+  faces <- readLumpV facesL 0x14 (getFace surfedges planes texinfos)
 
   let marksurfaces :: VS.Vector Word16 = readLumpS marksurfacesL 0x2
       markfaces = V.map (\i -> faces V.! fromIntegral i) (V.convert marksurfaces)
+      nleaves = B.length leavesL `div` 0x1c
 
-  leaves <- readLumpV leavesL 0x1c (getLeaf markfaces)
+  _bspLeaves <- readLumpV leavesL 0x1c (getLeaf markfaces nleaves visL)
   nodes <- readLumpV nodesL 0x18 (getNodeI planes)
 
-  let _bspTree = tieBspTree leaves nodes
+  -- let entitiesT = T.decodeUtf8 entitiesL
+  -- traceM (T.unpack entitiesT)
+
+  let _bspTree = tieBspTree nodes
 
   pure Bsp {..}
 
@@ -122,7 +138,7 @@ lookupSurfedge edges i
   | i < 0 = (edges VS.! fromIntegral (- i)) ^. _yx
   | otherwise = edges VS.! fromIntegral i
 
-getNodeI :: V.Vector Plane -> Get (BspTreeF Int16)
+getNodeI :: V.Vector Plane -> Get ((BspTreeF l) Int16)
 getNodeI planes = do
   iplane <- fromIntegral <$> getWord32le
   _nodeFront <- getInt16le
@@ -132,16 +148,30 @@ getNodeI planes = do
   let _nodePlane = planes V.! iplane
   pure Node {..}
 
-getLeaf :: V.Vector Face -> Get (BspTreeF a)
-getLeaf markfaces = do
+getLeaf :: V.Vector Face -> Int -> B.ByteString -> Get LeafData
+getLeaf markfaces nleaves visL = do
   skip 0x4 -- contents
-  skip 0x4 -- visoff
+  visoff <- fromIntegral <$> getWord32le
   skip 0xc -- bbox
   imarksurface <- fromIntegral <$> getWord16le
   nmarksurface <- fromIntegral <$> getWord16le
   skip 0x4
   let _leafFaces = V.slice imarksurface nmarksurface markfaces
-  pure Leaf {..}
+      _leafVis = V.fromList (P.toList (unpackVisData nleaves 0 (B.drop visoff visL)))
+  pure LeafData {..}
+
+unpackVisData :: Int -> Int -> B.ByteString -> Producer Int Identity ()
+unpackVisData nleaves l b
+  | l >= nleaves = pure ()
+  | otherwise =
+    if x == 0
+      then unpackVisData nleaves (l + fromIntegral n * 8) xs'
+      else do
+        traverseOf_ (bits . filtered id . asIndex . to (+ l)) yield x
+        unpackVisData nleaves (l + 8) xs
+  where
+    (x, xs) = (B.head b, B.tail b)
+    (n, xs') = (B.head xs, B.tail xs)
 
 getPlane :: Get Plane
 getPlane = do
@@ -150,17 +180,18 @@ getPlane = do
   skip 0x4 -- type
   pure Plane {..}
 
-getFace :: VS.Vector Edge -> V.Vector Plane -> Get Face
-getFace edges planes = do
+getFace :: VS.Vector Edge -> V.Vector Plane -> V.Vector TexInfo -> Get Face
+getFace edges planes texinfos = do
   iplane <- fromIntegral <$> getWord16le
   _faceSide <- (/= 0) <$> getWord16le
   iedge <- fromIntegral <$> getWord32le
   nedge <- fromIntegral <$> getWord16le
-  skip 0x2 -- textureinfo
+  itexinfo <- fromIntegral <$> getWord16le
   skip 0x4 -- styles
   skip 0x4 -- lightmapoff
   let _faceEdges = VS.slice iedge nedge edges
       _facePlane = planes V.! iplane
+      _faceTexInfo = texinfos V.! itexinfo
   pure Face {..}
 
 getTextures :: B.ByteString -> Get (V.Vector (Either T.Text Texture))
@@ -183,9 +214,19 @@ getTexture bs = do
     then pure (Left name)
     else pure (Right (readTexture bs name (V2 width height) mip0))
 
-tieBspTree :: V.Vector (BspTreeF Int16) -> V.Vector (BspTreeF Int16) -> BspTree
-tieBspTree leaves nodes = ana coalg 0
+getTexInfo :: Get TexInfo
+getTexInfo = do
+  _texinfoS <- getV3
+  _texinfoSD <- getFloat32le
+  _texinfoT <- getV3
+  _texinfoTD <- getFloat32le
+  _texinfoTexture <- fromIntegral <$> getWord32le
+  skip 0x4 -- flags
+  pure TexInfo {..}
+
+tieBspTree :: V.Vector (BspTreeF Int Int16) -> BspTree Int
+tieBspTree nodes = ana coalg 0
   where
     coalg n
-      | n < 0 = leaves V.! fromIntegral (complement n)
+      | n < 0 = Leaf (fromIntegral (complement n))
       | otherwise = nodes V.! fromIntegral n

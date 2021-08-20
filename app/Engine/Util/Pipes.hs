@@ -1,11 +1,13 @@
 {-# LANGUAGE FlexibleContexts #-}
 
-module Engine.Util.Pipes (zipP, runGetPipe) where
+module Engine.Util.Pipes (zipP, runGetPipe, toListP') where
 
+import Control.Monad.Identity
 import Control.Monad.State
 import qualified Data.ByteString as B
 import Data.Serialize (Get, runGetState)
 import Pipes
+import Pipes.Internal
 import Pipes.Lift
 
 zipP :: (Traversable t, Monad m) => t (Producer a m r) -> Producer (t a) m r
@@ -25,3 +27,14 @@ runGetPipe p = evalStateT (distribute (hoist f p))
       let Right (x, s') = runGetState g s 0
       put s'
       pure x
+
+toListP' :: Producer a Identity b -> ([a], b)
+toListP' = go
+  where
+    go prod =
+      case prod of
+        Request v _ -> closed v
+        Respond a fu -> let (l, r) = go (fu ()) in (a : l, r)
+        M m -> go (runIdentity m)
+        Pure r -> ([], r)
+{-# INLINE toListP' #-}

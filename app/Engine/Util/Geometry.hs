@@ -37,7 +37,7 @@ fan = do
   go v1
 
 eulerToQuat :: V3 Float -> Quaternion Float
-eulerToQuat (V3 roll pitch yaw) = Quaternion qw (V3 qx qy qz)
+eulerToQuat (V3 roll pitch yaw) = Quaternion qw (V3 qx qy qz) -- Right handed, x is forward
   where
     cy = cos (yaw * 0.5)
     sy = sin (yaw * 0.5)

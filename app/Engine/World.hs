@@ -1,5 +1,5 @@
 module Engine.World where
 
-import Linear.V2
+import Engine.Player
 
-type World = V2 Float
+type World = Player
