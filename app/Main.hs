@@ -29,17 +29,8 @@ main = do
   done <- newIORef False
   input <- newInputContext
 
-  ir <-
-    forkFinally
-      (renderer input world)
-      (\r -> do
-          print r
-          atomicWriteIORef done True)
+  renderer input world
 
-  i <- myThreadId
-  putStrLn $ "logic: " <> show i
-  putStrLn $ "render: " <> show ir
-  logic input world done
 
 logic :: Input -> IORef World -> IORef Bool -> IO ()
 logic input world done = do
@@ -55,7 +46,7 @@ logic input world done = do
 thewire :: W a World
 thewire = playerWire >>> force
 
-renderer :: Input -> IORef World -> IO ()
+renderer :: Input -> IORef World -> _
 renderer input world = runContextT GLFW.defaultHandleConfig do
   win <-
     newWindow
@@ -90,8 +81,9 @@ renderer input world = runContextT GLFW.defaultHandleConfig do
 
   let coordsm = V4 (V4 0 (-1) 0 0) (V4 0 0 1 0) (V4 (-1) 0 0 0) (V4 0 0 0 1)
 
-  let rloop = do
-        w <- liftIO (readIORef world)
+  let rloop session wire = do
+        (d, session') <- stepSession session
+        (Right w, wire') <- liftIO $ runReaderT (stepWire wire d (Right ())) input
 
         Just (width, height) <- GLFW.getWindowSize win
         let aspect = fromIntegral width / fromIntegral height
@@ -105,9 +97,9 @@ renderer input world = runContextT GLFW.defaultHandleConfig do
 
         swapWindowBuffers win
         close <- GLFW.windowShouldClose win
-        unless (close == Just True) rloop
+        unless (close == Just True) (rloop session' wire')
 
-  rloop
+  rloop (countSession_ 1) thewire
 
 tickRateSession :: Session IO (Timed Int ())
 tickRateSession = Session do

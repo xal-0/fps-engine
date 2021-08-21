@@ -32,7 +32,7 @@ renderBsp :: BspGpu os -> V3 Float -> Render os (PrimitiveArray Triangles (B3 Fl
 renderBsp BspGpu {..} pos = do
   let leaves = _bspCpu ^. bspLeaves
       leaf = leafAtPos (_bspCpu ^. bspTree) pos
-  faceVAs <- sequenceA $ leaves ^.. ix leaf . leafVis . traverse . to (_bspLeafVA V.!?) . _Just
+  faceVAs <- sequenceA _bspLeafVA
   pure $ foldMap (toPrimitiveArray TriangleList) faceVAs
 
 loadLeaves ::
