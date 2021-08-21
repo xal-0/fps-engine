@@ -1,4 +1,5 @@
-module Engine.Render.Bsp (BspGpu, loadBsp, renderBsp) where
+{-# LANGUAGE EmptyCase #-}
+module Engine.Render.Bsp (BspGpu, loadBsp, renderBsp, renderBsp', lol, wew, oops) where
 
 import Control.Lens hiding (each)
 import Control.Monad.State.Strict
@@ -32,17 +33,39 @@ renderBsp :: BspGpu os -> V3 Float -> Render os (PrimitiveArray Triangles (B3 Fl
 renderBsp BspGpu {..} pos = do
   let leaves = _bspCpu ^. bspLeaves
       leaf = leafAtPos (_bspCpu ^. bspTree) pos
-  faceVAs <- sequenceA $ leaves ^.. ix leaf . leafVis . traverse . to (_bspLeafVA V.!?) . _Just
+  faceVAs <- case leaves ^? ix leaf . leafVis . _Just of
+    Nothing -> sequence _bspLeafVA
+    Just vis -> traverse (_bspLeafVA V.!) vis
   pure $ foldMap (toPrimitiveArray TriangleList) faceVAs
+
+
+renderBsp' :: BspGpu os -> V3 Float -> Render os (PrimitiveArray Triangles (B3 Float))
+renderBsp' BspGpu {..} pos = do
+  let leaf = leafAtPos (_bspCpu ^. bspTree) pos
+  va <- _bspLeafVA V.! leaf
+  pure (toPrimitiveArray TriangleList va)
+
+lol :: BspGpu os -> V3 Float -> Int
+lol BspGpu {..} pos = leafAtPos (_bspCpu ^. bspTree) pos
+
+wew :: BspGpu os -> V3 Float -> Int
+wew BspGpu {..} pos =
+  let leaves = _bspCpu ^. bspLeaves
+      leaf = leafAtPos (_bspCpu ^. bspTree) pos
+  in (leaves V.! leaf) ^. leafVis . to (maybe 0 V.length)
+
+oops :: BspGpu os -> Int
+oops BspGpu {..} = _bspCpu ^. bspLeaves . to V.length
 
 loadLeaves ::
   ContextHandler ctx =>
   V.Vector LeafData ->
   ContextT ctx os IO (LeafVA os)
 loadLeaves leaves = do
-  let (vertices, (offs, total)) = toListP' (runStateT (distribute (traverse leafTris leaves)) 0)
-  buf :: Buffer _ (B3 Float) <- newBuffer total
-  writeBuffer buf 0 vertices
+  let (vertices, offs) = toListP' (evalStateT (distribute (traverse leafTris leaves)) 0)
+      verticesV = V.fromList vertices
+  buf :: Buffer _ (B3 Float) <- newBuffer (V.length verticesV)
+  writeBuffer buf 0 (V.toList verticesV)
   let va = newVertexArray buf
   pure $ flip fmap offs \(start, len) ->
     takeVertices len . dropVertices start <$> va

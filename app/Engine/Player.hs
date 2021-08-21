@@ -56,7 +56,7 @@ playerWire = Player <$> pos <*> look
       returnA -< V2 yaw pitch
 
 velocity :: Float
-velocity = 10
+velocity = 5
 
 sensitivity :: Float
 sensitivity = 0.01

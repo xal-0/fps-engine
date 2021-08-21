@@ -41,6 +41,7 @@ executable halflife
                     , time
                     , vector
                     , ghc-compact
+                    , JuicyPixels
     hs-source-dirs:   app
     default-language: Haskell2010
     other-modules:    Engine.File.Studio
@@ -52,6 +53,7 @@ executable halflife
                     , Engine.Util.Geometry
                     , Engine.Render.Bsp
                     , Engine.Render.Texture
+                    , Engine.Render.Text
                     , Engine.Player
                     , Engine.Logic
                     , Engine.World

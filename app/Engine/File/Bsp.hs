@@ -54,7 +54,7 @@ type Edge = V2 (V3 Float)
 
 data LeafData = LeafData
   { _leafFaces :: V.Vector Face,
-    _leafVis :: V.Vector Int
+    _leafVis :: Maybe (V.Vector Int)
   }
   deriving (Show)
 
@@ -151,13 +151,15 @@ getNodeI planes = do
 getLeaf :: V.Vector Face -> Int -> B.ByteString -> Get LeafData
 getLeaf markfaces nleaves visL = do
   skip 0x4 -- contents
-  visoff <- fromIntegral <$> getWord32le
+  visoff <- fromIntegral <$> getInt32le
   skip 0xc -- bbox
   imarksurface <- fromIntegral <$> getWord16le
   nmarksurface <- fromIntegral <$> getWord16le
   skip 0x4
   let _leafFaces = V.slice imarksurface nmarksurface markfaces
-      _leafVis = V.fromList (P.toList (unpackVisData nleaves 0 (B.drop visoff visL)))
+      _leafVis = if visoff == -1
+        then Nothing
+        else Just (V.fromList (P.toList (unpackVisData nleaves 1 (B.drop visoff visL))))
   pure LeafData {..}
 
 unpackVisData :: Int -> Int -> B.ByteString -> Producer Int Identity ()
@@ -167,7 +169,7 @@ unpackVisData nleaves l b
     if x == 0
       then unpackVisData nleaves (l + fromIntegral n * 8) xs'
       else do
-        traverseOf_ (bits . filtered id . asIndex . to (+ l)) yield x
+        traverseOf_ (bits . filtered id . asIndex . to (+ l) . filtered (< nleaves)) yield x
         unpackVisData nleaves (l + 8) xs
   where
     (x, xs) = (B.head b, B.tail b)
