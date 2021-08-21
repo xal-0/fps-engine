@@ -30,7 +30,7 @@ type W = Wire (Timed Int  ()) () (ReaderT Input IO)
 type KeyStates = MV.IOVector GLFW.KeyState
 
 data Input = Input
-  { _inputKeys :: KeyStates,
+  { _inputKeys :: MVar KeyStates,
     _inputMouse :: IORef (V2 Float),
     _inputMouse1 :: IORef Bool
   }
@@ -39,7 +39,7 @@ makeLenses ''Input
 
 newInputContext :: IO Input
 newInputContext = do
-  _inputKeys <- MV.replicate totalKeys GLFW.KeyState'Released
+  _inputKeys <- MV.replicate totalKeys GLFW.KeyState'Released >>= newMVar
   _inputMouse <- newIORef 0
   _inputMouse1 <- newIORef False
   pure Input {..}
@@ -49,19 +49,19 @@ newInputContext = do
         - fromEnum (minBound :: GLFW.Key)
 
 keyCallback :: Input -> GLFW.Key -> Int -> GLFW.KeyState -> GLFW.ModifierKeys -> IO ()
-keyCallback Input {..} k _ s _ = MV.write _inputKeys (fromEnum k) s
+keyCallback Input {..} k _ s _ = withMVar _inputKeys (\a -> MV.write a (fromEnum k) s)
 
 mouseCallback :: Input -> GLFW.MouseButton -> GLFW.MouseButtonState -> GLFW.ModifierKeys -> IO ()
-mouseCallback Input {..} GLFW.MouseButton'1 s _ = writeIORef _inputMouse1 (s == GLFW.MouseButtonState'Pressed)
+mouseCallback Input {..} GLFW.MouseButton'1 s _ = atomicWriteIORef _inputMouse1 (s == GLFW.MouseButtonState'Pressed)
 mouseCallback _ _ _ _ = pure ()
 
 cursorPosCallback :: Input -> Double -> Double -> IO ()
-cursorPosCallback Input {..} x y = let s = fmap realToFrac (V2 x y) in seq s (atomicWriteIORef _inputMouse s)
+cursorPosCallback Input {..} x y = atomicWriteIORef _inputMouse (fmap realToFrac (V2 x y))
 
 getKey :: GLFW.Key -> W a GLFW.KeyState
 getKey key = mkGen_ \_ -> do
   keys <- view inputKeys
-  s <- liftIO $ MV.read keys (fromEnum key)
+  s <- liftIO (withMVar keys (\a -> MV.read a (fromEnum key)))
   pure (Right s)
 
 getKeyPress :: GLFW.Key -> W a Bool
