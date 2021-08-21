@@ -27,7 +27,7 @@ makeLenses ''Player
 
 integralClamp :: Float -> Float -> Float -> W Float Float
 integralClamp lo hi a = mkPure \_ da ->
-  let a' = clamp lo (a + da) hi in (Right a', integralClamp lo hi a')
+  let a' = clamp lo (a + da) hi in a' `seq` (Right a', integralClamp lo hi a')
 
 playerWire :: W a Player
 playerWire = Player <$> pos <*> look
@@ -56,7 +56,7 @@ playerWire = Player <$> pos <*> look
       returnA -< V2 yaw pitch
 
 velocity :: Float
-velocity = 5
+velocity = 10
 
 sensitivity :: Float
 sensitivity = 0.01

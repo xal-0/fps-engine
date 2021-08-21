@@ -43,14 +43,21 @@ main = do
 
 logic :: Input -> IORef World -> IORef Bool -> IO ()
 logic input world done = do
-  let lloop s w = do
+  let lloop t s w = do
         (d, s') <- stepSession s
         (Right o, w') <- runReaderT (stepWire w d (Right ())) input
         atomicWriteIORef world o
         isdone <- readIORef done
-        unless isdone (lloop s' w')
 
-  lloop tickRateSession thewire
+        t' <- getCurrentTime
+        let dt = diffUTCTime t' t
+        threadDelay (truncate (1000000 * (tickTime - dt)))
+        unless isdone (lloop t' s' w')
+
+  t <- getCurrentTime
+  lloop t (countSession_ 1) thewire
+
+tickTime = 1 / 100
 
 thewire :: W a World
 thewire = playerWire >>> force
@@ -108,22 +115,3 @@ renderer input world = runContextT GLFW.defaultHandleConfig do
         unless (close == Just True) rloop
 
   rloop
-
-tickRateSession :: Session IO (Timed Int ())
-tickRateSession = Session do
-  t <- liftIO getCurrentTime
-  pure (Timed 1 (), session t)
-  where
-    session t = Session do
-      t' <- liftIO getCurrentTime
-      let dt = diffUTCTime t' t
-      if dt < tickTime
-        then do
-          threadDelay (truncate (waitTime dt))
-          stepSession (session t')
-        else pure (Timed 1 (), session t')
-
-    tickTime :: NominalDiffTime
-    tickTime = 1 / 128
-
-    waitTime dt = 1000000 * nominalDiffTimeToSeconds (tickTime - dt)
