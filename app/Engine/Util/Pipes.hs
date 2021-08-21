@@ -3,7 +3,7 @@
 module Engine.Util.Pipes (zipP, runGetPipe, toListP') where
 
 import Control.Monad.Identity
-import Control.Monad.State
+import Control.Monad.State.Strict
 import qualified Data.ByteString as B
 import Data.Serialize (Get, runGetState)
 import Pipes

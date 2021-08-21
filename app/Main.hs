@@ -20,7 +20,8 @@ import FRP.Netwire hiding (id, unless)
 import Graphics.GPipe
 import qualified Graphics.GPipe.Context.GLFW as GLFW
 import Prelude hiding ((.))
-import System.Mem (performMinorGC)
+import System.Mem (performMinorGC, performMajorGC)
+import System.Environment (getArgs)
 
 main :: IO ()
 main = do
@@ -28,10 +29,16 @@ main = do
   done <- newIORef False
   input <- newInputContext
 
-  _ <-
+  ir <-
     forkFinally
       (renderer input world)
-      (const (atomicWriteIORef done True))
+      (\r -> do
+          print r
+          atomicWriteIORef done True)
+
+  i <- myThreadId
+  putStrLn $ "logic: " <> show i
+  putStrLn $ "render: " <> show ir
   logic input world done
 
 logic :: Input -> IORef World -> IORef Bool -> IO ()
@@ -46,7 +53,7 @@ logic input world done = do
   lloop tickRateSession thewire
 
 thewire :: W a World
-thewire = playerWire
+thewire = playerWire >>> force
 
 renderer :: Input -> IORef World -> IO ()
 renderer input world = runContextT GLFW.defaultHandleConfig do
@@ -64,7 +71,8 @@ renderer input world = runContextT GLFW.defaultHandleConfig do
   Just () <- GLFW.setMouseButtonCallback win (Just (mouseCallback input))
   Just () <- GLFW.setCursorPosCallback win (Just (cursorPosCallback input))
 
-  bspGpu <- loadBsp "maps/c1a0.bsp"
+  [mapname] <- liftIO getArgs
+  bspGpu <- loadBsp mapname
 
   shader <- compileShader do
     prims <- toPrimitiveStream (view _2)
@@ -83,7 +91,6 @@ renderer input world = runContextT GLFW.defaultHandleConfig do
   let coordsm = V4 (V4 0 (-1) 0 0) (V4 0 0 1 0) (V4 (-1) 0 0 0) (V4 0 0 0 1)
 
   let rloop = do
-        liftIO performMinorGC
         w <- liftIO (readIORef world)
 
         Just (width, height) <- GLFW.getWindowSize win
@@ -92,7 +99,7 @@ renderer input world = runContextT GLFW.defaultHandleConfig do
         writeBuffer matBuf 0 [perspective (pi / 2) aspect 1 10000 !*! coordsm !*! playerMat w]
 
         render do
-          clearWindowColor win (V3 0.1 0.1 0.1)
+          clearWindowColor win 0
           prims <- renderBsp bspGpu (w ^. playerPos)
           shader (V2 width height, prims, matBuf)
 
@@ -117,6 +124,6 @@ tickRateSession = Session do
         else pure (Timed 1 (), session t')
 
     tickTime :: NominalDiffTime
-    tickTime = 1 / 64
+    tickTime = 1 / 128
 
     waitTime dt = 1000000 * nominalDiffTimeToSeconds (tickTime - dt)

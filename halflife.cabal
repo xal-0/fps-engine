@@ -4,7 +4,7 @@ version:            0.1.0.0
 
 executable halflife
     main-is:          Main.hs
-    ghc-options:      -threaded
+    ghc-options:      -threaded -rtsopts
                       -Wall
                       -Wno-partial-type-signatures
                       -Wno-missing-signatures
@@ -29,7 +29,6 @@ executable halflife
                     , data-default
                     , data-fix
                     , directory
-                    , ghc-heap-view
                     , gl
                     , lens
                     , linear
@@ -41,6 +40,7 @@ executable halflife
                     , text
                     , time
                     , vector
+                    , ghc-compact
     hs-source-dirs:   app
     default-language: Haskell2010
     other-modules:    Engine.File.Studio
