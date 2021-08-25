@@ -1,5 +1,5 @@
 {-# LANGUAGE EmptyCase #-}
-module Engine.Render.Bsp (BspGpu, loadBsp, renderBsp, renderBsp', lol, wew, oops) where
+module Engine.Render.Bsp (BspGpu, loadBsp, renderBsp, visStats) where
 
 import Control.Lens hiding (each)
 import Control.Monad.State.Strict
@@ -38,24 +38,12 @@ renderBsp BspGpu {..} pos = do
     Just vis -> traverse (_bspLeafVA V.!) vis
   pure $ foldMap (toPrimitiveArray TriangleList) faceVAs
 
-
-renderBsp' :: BspGpu os -> V3 Float -> Render os (PrimitiveArray Triangles (B3 Float))
-renderBsp' BspGpu {..} pos = do
-  let leaf = leafAtPos (_bspCpu ^. bspTree) pos
-  va <- _bspLeafVA V.! leaf
-  pure (toPrimitiveArray TriangleList va)
-
-lol :: BspGpu os -> V3 Float -> Int
-lol BspGpu {..} pos = leafAtPos (_bspCpu ^. bspTree) pos
-
-wew :: BspGpu os -> V3 Float -> Int
-wew BspGpu {..} pos =
+visStats :: BspGpu os -> V3 Float -> (Int, Int)
+visStats BspGpu {..} pos =
   let leaves = _bspCpu ^. bspLeaves
       leaf = leafAtPos (_bspCpu ^. bspTree) pos
-  in (leaves V.! leaf) ^. leafVis . to (maybe 0 V.length)
-
-oops :: BspGpu os -> Int
-oops BspGpu {..} = _bspCpu ^. bspLeaves . to V.length
+      vis = (leaves V.! leaf) ^. leafVis . to (maybe 0 V.length)
+  in (vis, V.length leaves)
 
 loadLeaves ::
   ContextHandler ctx =>

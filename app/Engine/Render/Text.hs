@@ -9,9 +9,14 @@ import Graphics.GPipe
 
 newtype TextureShader os
   = TextureShader
-      (CompiledShader os (Window os RGBFloat (), PrimitiveArray Triangles (B2 Float, B2 Float),
-                          V2 Int,
-                          Buffer os (Uniform (B3 Float))))
+      ( CompiledShader
+          os
+          ( Window os RGBFloat (),
+            PrimitiveArray Triangles (B2 Float, B2 Float),
+            V2 Int,
+            Buffer os (Uniform (B3 Float))
+          )
+      )
 
 loadFont :: ContextHandler ctx => ContextT ctx os IO (TextureShader os)
 loadFont = do
@@ -32,12 +37,13 @@ loadFont = do
         (\s -> (FrontAndBack, PolygonFill, ViewPort 0 (s ^. _3), DepthRange 0 1))
         (fmap (\(V2 x y, uv) -> (V4 x y 0 1, uv)) prims)
     let frags' =
-          fmap
-            ( \uv ->
-                let x = sample2D sampler SampleAuto Nothing Nothing uv
-                 in x *^ col
-            )
-            frags
+          filterFragments (/=* 0) $
+            fmap
+              ( \uv ->
+                  let x = sample2D sampler SampleAuto Nothing Nothing uv
+                   in x *^ col
+              )
+              frags
     drawWindowColor
       (\s -> (s ^. _1, ContextColorOption NoBlending (V3 True True True)))
       frags'
@@ -70,8 +76,8 @@ drawString (TextureShader shader) win viewport col (V2 posX posY) str = do
               (V2 0 charY, V2 u v'),
               (V2 charX charY, V2 u' v')
             ]
-            & traverse . _1 %~ (+ p)
-            & traverse . _1 %~ pixelToNDS
+              & traverse . _1 %~ (+ p)
+              & traverse . _1 %~ pixelToNDS
 
       lineVerts = concat . zipWith charVerts [V2 (x * charX + posX) posY | x <- [0 ..]]
 

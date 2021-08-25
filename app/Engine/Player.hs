@@ -6,9 +6,7 @@ import Control.Lens
 import Control.Wire
 import Data.Bool
 import Data.Default
-import Debug.Trace
 import Engine.Logic
-import Engine.Util.Geometry
 import FRP.Netwire
 import qualified Graphics.GPipe.Context.GLFW.Input as GLFW
 import Graphics.GPipe.Expr (clamp)
