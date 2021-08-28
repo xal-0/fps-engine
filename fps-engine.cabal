@@ -1,8 +1,8 @@
 cabal-version:      2.4
-name:               halflife
+name:               fps-engine
 version:            0.1.0.0
 
-executable halflife
+executable fps-engine
     main-is:          Main.hs
     ghc-options:      -threaded -rtsopts
                       -Wall
