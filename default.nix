@@ -13,7 +13,7 @@ let
   );
 
   h2 = h1.extend (h1.packageSourceOverrides {
-    halflife = ./.;
+    fps-engine = ./.;
   });
 
 in

@@ -54,7 +54,9 @@ executable fps-engine
                     , Engine.Render.Bsp
                     , Engine.Render.Texture
                     , Engine.Render.Text
+                    , Engine.Render.Ui
                     , Engine.Player
                     , Engine.Logic
                     , Engine.World
                     , Engine.BspTree
+                    , Engine.Ui

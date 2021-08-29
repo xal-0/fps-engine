@@ -51,9 +51,8 @@ loadLeaves ::
   ContextT ctx os IO (LeafVA os)
 loadLeaves leaves = do
   let (vertices, offs) = toListP' (evalStateT (distribute (traverse leafTris leaves)) 0)
-      verticesV = V.fromList vertices
-  buf :: Buffer _ (B3 Float) <- newBuffer (V.length verticesV)
-  writeBuffer buf 0 (V.toList verticesV)
+  buf :: Buffer _ (B3 Float) <- newBuffer (length vertices)
+  writeBuffer buf 0 vertices
   let va = newVertexArray buf
   pure $ flip fmap offs \(start, len) ->
     takeVertices len . dropVertices start <$> va
@@ -68,5 +67,4 @@ leafTris l = do
   pure (start, end - start)
 
 faceTris :: Monad m => Face -> Producer (V3 Float) m ()
-faceTris Face {..} = do
-  each (VS.toList _faceEdges) >-> P.map (view _x) >-> fan
+faceTris Face {..} = each (VS.toList _faceEdges) >-> P.map (view _x) >-> fan

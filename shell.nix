@@ -1,7 +1,7 @@
 { pkgs ? import <nixpkgs> { } }:
 
 (import ./. { inherit pkgs; }).shellFor {
-  packages = p: [ p.halflife ];
+  packages = p: [ p.fps-engine ];
   withHoogle = true;
   buildInputs = with pkgs; [
     cabal-install

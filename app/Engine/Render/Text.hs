@@ -4,7 +4,6 @@ import Codec.Picture
 import Control.Lens
 import Control.Monad.IO.Class
 import Data.Char
-import Debug.Trace
 import Graphics.GPipe
 
 newtype TextureShader os
