@@ -1,5 +1,17 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 module Engine.World where
 
-import Engine.Player
+import Control.Lens
+import Data.Default
+import Engine.Logic
 
-type World = Player
+data World = World
+
+instance Default World where
+  def = World
+
+makeLenses ''World
+
+worldWire :: W a World
+worldWire = undefined
