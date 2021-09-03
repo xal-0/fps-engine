@@ -46,7 +46,7 @@ playerWire = Player <$> pos <*> look
             + leftv ^* velocity * (a - d)
 
     look = proc _ -> do
-      V2 cx cy <- getCursor -< ()
+      V2 cx cy <- getMouse -< ()
       cx' <- derivative <|> 0 -< - cx
       cy' <- derivative <|> 0 -< - cy
       yaw <- integral 0 -< sensitivity * cx'

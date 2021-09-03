@@ -9,7 +9,7 @@ module Engine.Logic
     getKey,
     getKeyPress,
     getMouse1,
-    getCursor,
+    getMouse,
     GLFW.Key (..),
     W,
   )
@@ -72,5 +72,5 @@ getKeyPress key =
 getMouse1 :: W a Bool
 getMouse1 = mkGen_ \_ -> view inputMouse1 >>= fmap Right . liftIO . readIORef
 
-getCursor :: W a (V2 Float)
-getCursor = mkGen_ \_ -> view inputMouse >>= fmap Right . liftIO . readIORef
+getMouse :: W a (V2 Float)
+getMouse = mkGen_ \_ -> view inputMouse >>= fmap Right . liftIO . readIORef

@@ -3,7 +3,6 @@
 module Engine.Render.Ui
   ( compilePictureShader,
     drawPicture,
-    Picture (..),
     DrawEnv (DrawEnv),
   )
 where
@@ -12,7 +11,10 @@ import Codec.Picture
 import Control.Lens
 import Control.Monad.IO.Class
 import Data.Char
+import Engine.Ui
 import Graphics.GPipe
+import Debug.Trace
+import Control.Monad
 
 data DrawEnv os = DrawEnv
   { _envWindow :: Window os RGBAFloat (),
@@ -20,13 +22,6 @@ data DrawEnv os = DrawEnv
   }
 
 makeLenses ''DrawEnv
-
-data Picture
-  = PRect !(V2 Int)
-  | PString String
-  | PTranslate !(V2 Int) !Picture
-  | PColour !(V4 Float) !Picture
-  | PPictures ![Picture]
 
 newtype PictureShader os
   = PictureShader (CompiledShader os (PictureEnv os))
@@ -70,13 +65,14 @@ compilePictureShader = do
 drawPicture :: ContextHandler ctx => PictureShader os -> DrawEnv os -> Picture -> ContextT ctx os IO ()
 drawPicture (PictureShader shader) env pic = do
   let verts = pictureVerts env pic
-  buf <- newBuffer (length verts)
-  writeBuffer buf 0 verts
+  unless (null verts) do
+    buf <- newBuffer (length verts)
+    writeBuffer buf 0 verts
 
-  render do
-    va <- newVertexArray buf
-    let prims = toPrimitiveArray TriangleList va
-    shader $ PictureEnv env prims
+    render do
+      va <- newVertexArray buf
+      let prims = toPrimitiveArray TriangleList va
+      shader $ PictureEnv env prims
 
 pictureVerts :: DrawEnv os -> Picture -> [(V2 Float, V2 Float, V4 Float)]
 pictureVerts env (PColour col p) = pictureVerts env p & traverse . _3 .~ col
@@ -93,6 +89,7 @@ pictureVerts env (PString str) = stringVerts env str
 pictureVerts env (PTranslate pos p) =
   fmap (_1 %~ (+ (fmap fromIntegral pos * (envPixelSize env & _2 %~ negate)))) (pictureVerts env p)
 pictureVerts env (PPictures p) = foldr (\x -> (pictureVerts env x ++)) [] p
+pictureVerts _ PNone = []
 
 stringVerts env str =
   let textureChar = 1 / fmap fromIntegral textureSize

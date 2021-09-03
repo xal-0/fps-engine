@@ -13,7 +13,6 @@ import Data.Default (def)
 import Data.IORef
 import Data.Time.Clock
 import Engine.Logic
-import Engine.Player
 import Engine.Render.Bsp
 import Engine.Render.Ui
 import Engine.World
@@ -67,7 +66,7 @@ renderer input world = runContextT GLFW.defaultHandleConfig do
           }
       )
 
-  Just () <- GLFW.setCursorInputMode win GLFW.CursorInputMode'Disabled
+  -- Just () <- GLFW.setCursorInputMode win GLFW.CursorInputMode'Disabled
 
   Just () <- GLFW.setKeyCallback win (Just (keyCallback input))
   Just () <- GLFW.setMouseButtonCallback win (Just (mouseCallback input))
@@ -84,18 +83,20 @@ renderer input world = runContextT GLFW.defaultHandleConfig do
         render do
           clearWindowColor win 0
 
+        drawPicture pictureShader (DrawEnv win viewport) (w ^. worldUi)
+
         t' <- liftIO getCurrentTime
         let dt = diffUTCTime t' t
             fps = realToFrac (1 / dt) :: Float
 
-        drawPicture pictureShader (DrawEnv win viewport) $
-          PTranslate
-            (V2 10 10)
-            ( PPictures
-                [ PColour (V4 0 0 0.5 0.8) (PRect (V2 52 17)),
-                  PTranslate (V2 1 1) (PString (printf "%2.0f fps" fps))
-                ]
-            )
+        -- drawPicture pictureShader (DrawEnv win viewport) $
+        --   PTranslate
+        --     (V2 10 10)
+        --     ( PPictures
+        --         [ PColour (V4 0 0 0.5 0.8) (PRect (V2 52 17)),
+        --           PTranslate (V2 1 1) (PString (printf "%2.0f fps" fps))
+        --         ]
+        --     )
 
         swapWindowBuffers win
         close <- GLFW.windowShouldClose win
