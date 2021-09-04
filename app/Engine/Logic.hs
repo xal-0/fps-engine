@@ -25,7 +25,7 @@ import qualified Graphics.GPipe.Context.GLFW as GLFW
 import Linear.V2
 import Prelude hiding ((.))
 
-type W = Wire (Timed Int  ()) () (ReaderT Input IO)
+type W = Wire (Timed Int ()) () (ReaderT Input IO)
 
 type KeyStates = MV.IOVector GLFW.KeyState
 

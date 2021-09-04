@@ -14,6 +14,7 @@ import Graphics.GPipe hiding (trace)
 import Pipes
 import Pipes.Lift
 import qualified Pipes.Prelude as P
+import System.IO.Unsafe
 
 data BspGpu os = BspGpu
   { _bspLeafVA :: LeafVA os,
@@ -50,15 +51,15 @@ loadLeaves ::
   V.Vector LeafData ->
   ContextT ctx os IO (LeafVA os)
 loadLeaves leaves = do
-  let (vertices, offs) = toListP' (evalStateT (distribute (traverse leafTris leaves)) 0)
+  let (vertices, offs) = toListP' (evalStateT (distribute (itraverse leafTris leaves)) 0)
   buf :: Buffer _ (B3 Float) <- newBuffer (length vertices)
   writeBuffer buf 0 vertices
   let va = newVertexArray buf
   pure $ flip fmap offs \(start, len) ->
     takeVertices len . dropVertices start <$> va
 
-leafTris :: LeafData -> Producer (V3 Float) (State Int) (Int, Int)
-leafTris l = do
+leafTris :: Int -> LeafData -> Producer (V3 Float) (State Int) (Int, Int)
+leafTris i l = do
   start <- get
   traverse_ faceTris (l ^. leafFaces) `for` \v -> do
     yield v

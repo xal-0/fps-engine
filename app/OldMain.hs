@@ -217,3 +217,36 @@ loadMdl file = do
 
 v2pt :: Iso' (V2 Int) AT.Pt
 v2pt = iso (\(V2 x y) -> AT.Pt x y) (\(AT.Pt x y) -> V2 x y)
+
+{-
+
+
+  [mapname] <- liftIO getArgs
+  bspGpu <- loadBsp mapname
+
+  shader <- compileShader do
+    prims <- toPrimitiveStream (view _2)
+    lookmat <- getUniform (\s -> (s ^. _3, 0))
+    V3 r g b <- getUniform (\s -> (s ^. _4, 0))
+    frags <-
+      rasterize
+        (\e -> (FrontAndBack, PolygonLine 1, ViewPort 0 (e ^. _1), DepthRange 0 1))
+        (fmap (\(V3 x y z) -> (lookmat !* V4 x y z 1, ())) prims)
+
+    drawWindowColor
+      (const (win, ContextColorOption NoBlending (V4 True True True False)))
+      (fmap (const (V4 r g b 0)) frags)
+
+  matBuf :: Buffer _ (Uniform (M44 (B Float))) <- newBuffer 1
+  colBuf :: Buffer _ (Uniform (B3 Float)) <- newBuffer 1
+
+  let coordsm = V4 (V4 0 (-1) 0 0) (V4 0 0 1 0) (V4 (-1) 0 0 0) (V4 0 0 0 1)
+
+
+        writeBuffer matBuf 0 [perspective (pi / 2) aspect 1 10000 !*! coordsm !*! playerMat w]
+        writeBuffer colBuf 0 [V3 1 1 1]
+
+        --   prims <- renderBsp bspGpu (w ^. playerPos)
+        --   shader (viewport, prims, matBuf, colBuf)
+
+-}

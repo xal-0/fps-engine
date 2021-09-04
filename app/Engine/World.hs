@@ -19,5 +19,5 @@ makeLenses ''World
 
 worldWire :: W a World
 worldWire = proc _ -> do
-  _worldUi <- drawUi (button "hello") -< ()
+  _worldUi <- pure PNone -< ()
   returnA -< World {..}

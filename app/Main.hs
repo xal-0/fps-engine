@@ -27,19 +27,22 @@ main = do
   world <- newIORef def
   done <- newIORef False
   input <- newInputContext
+  requests <- newIORef []
 
   _ <-
     forkFinally
-      (renderer input world)
+      (renderer input world requests)
       ( \r -> do
           print r
           atomicWriteIORef done True
       )
 
-  logic input world done
+  logic input world done requests
 
-logic :: Input -> IORef World -> IORef Bool -> IO ()
-logic input world done = do
+data Request
+
+logic :: Input -> IORef World -> IORef Bool -> IORef [Request] -> IO ()
+logic input world done requests = do
   let lloop t s w = do
         (d, s') <- stepSession s
         (Right o, w') <- runReaderT (stepWire w d (Right ())) input
@@ -56,8 +59,8 @@ logic input world done = do
 
 tickTime = 1 / 64
 
-renderer :: Input -> IORef World -> IO ()
-renderer input world = runContextT GLFW.defaultHandleConfig do
+renderer :: Input -> IORef World -> IORef [Request] -> IO ()
+renderer input world requests = runContextT GLFW.defaultHandleConfig do
   win <-
     newWindow
       (WindowFormatColor RGBA8)
@@ -66,14 +69,17 @@ renderer input world = runContextT GLFW.defaultHandleConfig do
           }
       )
 
-  -- Just () <- GLFW.setCursorInputMode win GLFW.CursorInputMode'Disabled
-
   Just () <- GLFW.setKeyCallback win (Just (keyCallback input))
   Just () <- GLFW.setMouseButtonCallback win (Just (mouseCallback input))
   Just () <- GLFW.setCursorPosCallback win (Just (cursorPosCallback input))
   pictureShader <- compilePictureShader
 
+  bsp <- loadBsp "maps/de_dust2.bsp"
+
   let rloop t = do
+        reqs <- liftIO $ atomicModifyIORef' requests ([], )
+        forM_ reqs \case
+
         w <- liftIO (readIORef world)
 
         Just (width, height) <- GLFW.getWindowSize win
@@ -88,19 +94,12 @@ renderer input world = runContextT GLFW.defaultHandleConfig do
         t' <- liftIO getCurrentTime
         let dt = diffUTCTime t' t
             fps = realToFrac (1 / dt) :: Float
-
-        -- drawPicture pictureShader (DrawEnv win viewport) $
-        --   PTranslate
-        --     (V2 10 10)
-        --     ( PPictures
-        --         [ PColour (V4 0 0 0.5 0.8) (PRect (V2 52 17)),
-        --           PTranslate (V2 1 1) (PString (printf "%2.0f fps" fps))
-        --         ]
-        --     )
-
+        
         swapWindowBuffers win
+        
         close <- GLFW.windowShouldClose win
-        unless (close == Just True) (rloop t')
+        -- unless (close == Just True) (rloop t')
+        pure ()
 
   t <- liftIO getCurrentTime
   rloop t

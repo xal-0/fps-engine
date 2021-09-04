@@ -17,6 +17,8 @@ executable fps-engine
                       , Arrows
                       , PartialTypeSignatures
                       , TupleSections
+                      , LambdaCase
+                      , EmptyCase
                       , NamedFieldPuns
     build-depends:    GPipe-Core
                     , GPipe-GLFW4

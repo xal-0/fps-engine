@@ -20,19 +20,23 @@ data WidgetInput = WidgetInput
 
 type Widget a b = W (WidgetInput, a) (Picture, b)
 
-button :: String -> Widget a (Event ())
-button label = proc (WidgetInput {..}, _) -> do
+button :: Widget String (Event ())
+button = proc (WidgetInput {..}, label) -> do
   ev <- edge id -< _widgetMouse1
   let col = if _widgetMouse1 then V4 0.3 0.3 1 1 else V4 0 0 1 1
+      V2 w h = textSize label
       pict = PPictures
-        [ PColour col (PRect (V2 100 20))
+        [ PColour col (PRect (V2 (w + 4) (h + 2)))
         , PTranslate (V2 2 1) (PString label)
         ]
   returnA -< (pict, void ev)
 
-drawUi :: Widget () b -> W a Picture
-drawUi widget = proc _ -> do
+textSize :: String -> V2 Int
+textSize s = V2 (9 * length s) 15
+
+drawUi :: Widget a b -> W a (Picture, b)
+drawUi widget = proc a -> do
   _widgetMouse <- fmap Just getMouse -< ()
   _widgetMouse1 <- getMouse1 -< ()
-  (p, _) <- widget -< (WidgetInput {..}, ())
-  returnA -< p
+  (p, b) <- widget -< (WidgetInput {..}, a)
+  returnA -< (p, b)
