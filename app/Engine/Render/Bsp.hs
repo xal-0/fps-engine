@@ -1,20 +1,17 @@
 {-# LANGUAGE EmptyCase #-}
+
 module Engine.Render.Bsp (BspGpu, loadBsp, renderBsp, visStats) where
 
 import Control.Lens hiding (each)
 import Control.Monad.State.Strict
-import Data.Foldable
+import Data.List
+import Data.Monoid
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import Engine.BspTree
 import Engine.File.Bsp
 import Engine.Util.Geometry
-import Engine.Util.Pipes
 import Graphics.GPipe hiding (trace)
-import Pipes
-import Pipes.Lift
-import qualified Pipes.Prelude as P
-import System.IO.Unsafe
 
 data BspGpu os = BspGpu
   { _bspLeafVA :: LeafVA os,
@@ -44,28 +41,25 @@ visStats BspGpu {..} pos =
   let leaves = _bspCpu ^. bspLeaves
       leaf = leafAtPos (_bspCpu ^. bspTree) pos
       vis = (leaves V.! leaf) ^. leafVis . to (maybe 0 V.length)
-  in (vis, V.length leaves)
+   in (vis, V.length leaves)
 
 loadLeaves ::
   ContextHandler ctx =>
   V.Vector LeafData ->
   ContextT ctx os IO (LeafVA os)
 loadLeaves leaves = do
-  let (vertices, offs) = toListP' (evalStateT (distribute (itraverse leafTris leaves)) 0)
-  buf :: Buffer _ (B3 Float) <- newBuffer (length vertices)
+  let (vertices, total) = fmap getSum (foldMap leafTris (V.toList leaves))
+      offs = scanl' (\o (_, l) -> o + getSum l) 0 (fmap leafTris (V.toList leaves))
+      lengths = fmap (getSum . snd . leafTris) (V.toList leaves)
+
+  buf :: Buffer _ (B3 Float) <- newBuffer total
   writeBuffer buf 0 vertices
   let va = newVertexArray buf
-  pure $ flip fmap offs \(start, len) ->
-    takeVertices len . dropVertices start <$> va
+      makeVa = \start len -> takeVertices len . dropVertices start <$> va
+  pure $ V.fromListN (V.length leaves) (zipWith makeVa offs lengths)
 
-leafTris :: Int -> LeafData -> Producer (V3 Float) (State Int) (Int, Int)
-leafTris i l = do
-  start <- get
-  traverse_ faceTris (l ^. leafFaces) `for` \v -> do
-    yield v
-    id += 1
-  end <- get
-  pure (start, end - start)
+leafTris :: LeafData -> ([V3 Float], Sum Int)
+leafTris l = foldMap faceTris (l ^. leafFaces)
 
-faceTris :: Monad m => Face -> Producer (V3 Float) m ()
-faceTris Face {..} = each (VS.toList _faceEdges) >-> P.map (view _x) >-> fan
+faceTris :: Face -> ([V3 Float], Sum Int)
+faceTris Face {..} = (VS.toList _faceEdges & fmap (view _x) & fan, Sum $ 3 * (VS.length _faceEdges - 2))

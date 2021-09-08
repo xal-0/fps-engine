@@ -38,8 +38,6 @@ import Engine.BspTree
 import Engine.File.Texture
 import Engine.Util.SGet
 import Linear (V2 (..), V3 (..), _yx)
-import Pipes
-import qualified Pipes.Prelude as P
 import System.IO.MMap
 
 data Face = Face
@@ -159,18 +157,18 @@ getLeaf markfaces nleaves visL = do
   let _leafFaces = V.slice imarksurface nmarksurface markfaces
       _leafVis = if visoff == -1
         then Nothing
-        else Just (V.fromList (P.toList (unpackVisData nleaves 1 (B.drop visoff visL))))
+        else Just (V.fromList (unpackVisData nleaves 1 (B.drop visoff visL)))
   pure LeafData {..}
 
-unpackVisData :: Int -> Int -> B.ByteString -> Producer Int Identity ()
+unpackVisData :: Int -> Int -> B.ByteString -> [Int]
 unpackVisData nleaves l b
-  | l >= nleaves = pure ()
+  | l >= nleaves = []
   | otherwise =
     if x == 0
       then unpackVisData nleaves (l + fromIntegral n * 8) xs'
-      else do
-        traverseOf_ (bits . filtered id . asIndex . to (+ l) . filtered (< nleaves)) yield x
-        unpackVisData nleaves (l + 8) xs
+      else
+        (x ^.. (bits . filtered id . asIndex . to (+ l) . filtered (< nleaves)))
+          ++ unpackVisData nleaves (l + 8) xs
   where
     (x, xs) = (B.head b, B.tail b)
     (n, xs') = (B.head xs, B.tail xs)

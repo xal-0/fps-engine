@@ -36,7 +36,6 @@ executable fps-engine
                     , mmap
                     , mtl
                     , netwire
-                    , pipes
                     , recursion-schemes
                     , text
                     , time
@@ -46,11 +45,9 @@ executable fps-engine
                     , random
     hs-source-dirs:   app
     default-language: Haskell2010
-    other-modules:    Engine.File.Studio
-                    , Engine.File.Bsp
+    other-modules:    Engine.File.Bsp
                     , Engine.File.Texture
                     , Engine.File.Wad
-                    , Engine.Util.Pipes
                     , Engine.Util.SGet
                     , Engine.Util.Geometry
                     , Engine.Render.Bsp

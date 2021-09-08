@@ -44,10 +44,8 @@ import qualified Data.Vector.Storable as VS
 import Data.Word
 import Engine.File.Texture
 import Engine.Util.Geometry
-import Engine.Util.Pipes
 import Engine.Util.SGet
 import Linear hiding (trace)
-import Pipes as P
 import System.Directory
 import System.FilePath.Lens
 import System.IO.MMap
@@ -72,7 +70,7 @@ newtype Model = Model
 
 data Mesh = Mesh
   { _meshNumTris :: Int,
-    _meshTris :: Producer Vertex Identity (),
+    _meshTris :: V.Vector Vertex,
     _meshSkin :: Int
   }
 
@@ -101,7 +99,7 @@ data Seq = Seq
   { _seqName :: T.Text,
     _seqFps :: Float,
     _seqNumFrames :: Int,
-    _seqAdjs :: Producer SkelAdjustment Identity (),
+    _seqAdjs :: V.Vector SkelAdjustment,
     _seqEvents :: V.Vector (Int, Event)
   }
 
@@ -295,7 +293,7 @@ getEvent = do
         _ -> error "unknown event"
   pure (frame, ev)
 
-pSeqAdjs :: Monad m => Int -> V.Vector (Keyframe (Maybe B.ByteString)) -> Producer SkelAdjustment m ()
+pSeqAdjs :: Monad m => Int -> V.Vector (Keyframe (Maybe B.ByteString)) -> V.Vector SkelAdjustment m ()
 pSeqAdjs numframes keyframes = zipP (fmap pKeyframe keyframes)
   where
     pKeyframe keyframe = zipP (fmap prod keyframe)
