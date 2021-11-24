@@ -20,6 +20,7 @@ executable fps-engine
                       , LambdaCase
                       , EmptyCase
                       , NamedFieldPuns
+                      , MultiWayIf
     build-depends:    GPipe-Core
                     , GPipe-GLFW4
                     , atlas
