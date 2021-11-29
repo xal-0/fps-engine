@@ -1,4 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# OPTIONS_GHC -Wno-unused-matches #-}
 
 module Engine.File.Bsp
   ( readBsp,

@@ -13,7 +13,6 @@ import Control.Monad.IO.Class
 import Data.Char
 import Engine.Ui
 import Graphics.GPipe
-import Debug.Trace
 import Control.Monad
 
 data DrawEnv os = DrawEnv
